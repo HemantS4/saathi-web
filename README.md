@@ -54,6 +54,8 @@ On **Android Chrome** (ARCore phones) navigation runs as a **WebXR AR session**:
 - ARCore **tracks the phone's movement**, so the trail stays locked in place between GPS fixes instead of drifting.
 - GPS + compass only register the route to the world, refined by the direction you actually walk.
 
+**Lining the trail up with the road.** The app reads the compass before AR starts. Then, once you have walked about 4 m along the route, it uses the road direction you just covered to correct the trail's rotation, and keeps your position snapped onto the route line. If it still looks off, tap **Align** and drag sideways until the trail lies on the road.
+
 **iPhone Safari has no WebXR**, so it uses the camera overlay with the ground assumed at phone height. Use the ▲▼ *trail*
 buttons on the right to nudge the trail onto the ground (remembered per phone). Turn WebXR off with `useWebXR: false`
 in `js/config.js`.

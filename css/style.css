@@ -249,3 +249,16 @@ body.indoor .rescan { display: grid; }
 .spot-card { position: absolute; left: 14px; right: 14px; bottom: calc(180px + var(--safe-bottom)); z-index: 700; display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 16px; }
 .spot-card span { flex: 1; font-weight: 600; }
 .link-btn.light { color: rgba(255,255,255,.8); margin: 0; }
+
+/* Align the trail with the road */
+.tool-btn { width: 48px; height: 54px; border: 0; border-radius: 16px; display: grid; place-items: center; align-content: center; gap: 1px; padding: 0; }
+.tool-btn svg { width: 22px; height: 22px; fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.tool-btn small { font-size: 9.5px; color: rgba(255,255,255,.8); text-transform: uppercase; letter-spacing: .04em; }
+.align-layer { position: absolute; inset: 0; z-index: 800; touch-action: none; cursor: ew-resize; background: rgba(0,0,0,.08); }
+.align-arrows { position: absolute; left: 0; right: 0; top: 40%; display: flex; justify-content: space-between; align-items: center; padding: 0 22px;
+  color: #fff; font-weight: 700; text-shadow: 0 2px 6px rgba(0,0,0,.6); font-size: 26px; pointer-events: none; }
+.align-arrows span:nth-child(2) { font-size: 15px; text-transform: uppercase; letter-spacing: .1em; }
+.align-card { position: absolute; left: 14px; right: 14px; bottom: calc(180px + var(--safe-bottom)); display: flex; gap: 12px; align-items: center; padding: 14px 14px 14px 18px; }
+.align-card div { flex: 1; }
+.align-card b { display: block; }
+.align-card small { display: block; color: rgba(255,255,255,.75); font-size: 13px; margin-top: 2px; }

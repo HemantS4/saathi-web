@@ -10,7 +10,10 @@ export async function computeRoute(origin, dest) {
     catch (e) { console.warn('[Saathi] Google route failed, trying OSM', e); }
   }
   try { return await osrmRoute(origin, dest); }
-  catch (e) { console.warn('[Saathi] OSM route failed, using straight line', e); }
+  catch (e) { console.warn('[Saathi] OSM foot route failed, trying backup router', e); }
+  // Backup: public OSRM demo (road network). Still follows real streets, which beats a straight line.
+  try { return await osrmRoute(origin, dest, 'https://router.project-osrm.org/route/v1/driving/'); }
+  catch (e) { console.warn('[Saathi] Backup route failed, using straight line', e); }
   return straight(origin, dest);
 }
 
@@ -52,8 +55,8 @@ async function googleRoute(origin, dest) {
   };
 }
 
-async function osrmRoute(origin, dest) {
-  const url = `${CONFIG.osrmFootUrl}${origin.lng},${origin.lat};${dest.lng},${dest.lat}?overview=full&geometries=polyline&steps=true`;
+async function osrmRoute(origin, dest, base = CONFIG.osrmFootUrl) {
+  const url = `${base}${origin.lng},${origin.lat};${dest.lng},${dest.lat}?overview=full&geometries=polyline&steps=true`;
   const res = await fetch(url);
   if (!res.ok) throw new Error('OSRM ' + res.status);
   const j = await res.json();

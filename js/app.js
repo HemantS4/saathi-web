@@ -563,6 +563,14 @@ async function start() {
   if (!S.ar) S.ar = new ARScene($('ar'));
   S.tripPoints = 0;
   S.arrived = false;
+  S.yawFix = 0;
+  S.autoYaw = 0;
+  // Start the compass BEFORE WebXR: Chrome often stops orientation events during an AR session, so the
+  // last reading from just before is what registers the trail to the street.
+  if (S.mode === 'outdoor') {
+    S.sensors = SIM ? new SimSensors(fromLocal(place, { x: -140, y: -190 })) : new Sensors();
+    S.sensors.startOrientation();
+  }
 
   if (S.useXR) {
     show('nav');
@@ -614,7 +622,6 @@ async function start() {
 function userError(msg) { const e = new Error(msg); e.userMessage = msg; return e; }
 
 async function startOutdoor() {
-  S.sensors = SIM ? new SimSensors(fromLocal(place, { x: -140, y: -190 })) : new Sensors();
   if (S.useXR) status('Finding your location…', 'Keep the camera pointed at the street.');
   else loading('Finding your location…', 'Step outside if you are indoors.');
   try {
@@ -788,6 +795,12 @@ function xrLoop(now, frame) {
     const pr = S.path.project(user, S.seg);
     S.seg = pr.seg;
     S.along = pr.along;
+    if (pr.lateral < 15) {
+      // You're walking the route, so the road direction you just covered tells us the true heading,
+      // and your position belongs on the route line (GPS drifts sideways by several metres).
+      al.walkAlong(cam, bearingAlong(S.path, Math.max(0, pr.along - 3)));
+      al.pinTo(cam, S.path.at(pr.along).p, 0.015);
+    }
     const got = S.ar.update(dt, user, pr.along, null);
     if (got) collect(got);
     const heading = (Aligner.yawOf(cam) + al.theta + 360) % 360;
@@ -826,7 +839,7 @@ function loop(now) {
     pr = path.project(local, S.seg);
     // Keep the trail under the user's feet when GPS wanders a little off the road.
     const snap = path.at(pr.along).p;
-    const k = pr.lateral < 15 ? 0.75 : 0;
+    const k = pr.lateral < 20 ? 0.9 : 0;
     user = { x: local.x + (snap.x - local.x) * k, y: local.y + (snap.y - local.y) * k };
   }
   S.seg = pr.seg;
@@ -834,9 +847,16 @@ function loop(now) {
 
   // Orientation: sensors if available, else GPS course / route direction.
   let q = sn.quaternion, heading = sn.heading, pitch = sn.pitch;
-  if (S.mode === 'indoor' && S.headingOffset != null) {
-    heading = (sn.heading + S.headingOffset + 360) % 360;
-    q = tmpQ.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, -S.headingOffset * THREE.MathUtils.DEG2RAD).multiply(sn.quaternion);
+  if (S.mode === 'outdoor' && sn.hasOrientation && !SIM && sn.gpsHeading != null && pr.lateral < 12 && !S.yawLocked) {
+    // Walking along the route: people mostly hold the phone pointing where they walk, so a steady difference between
+    // the compass and the road's direction is compass error. Learn it slowly.
+    const obs = angleDiff(sn.heading, bearingAlong(path, pr.along));
+    if (Math.abs(obs) < 50) S.autoYaw += angleDiff(S.autoYaw, obs) * 0.01;
+  }
+  const corr = (S.mode === 'indoor' ? (S.headingOffset ?? 0) : S.autoYaw) + S.yawFix;
+  if (sn.hasOrientation && (corr !== 0 || S.mode === 'indoor') && (S.mode !== 'indoor' || S.headingOffset != null)) {
+    heading = (sn.heading + corr + 360) % 360;
+    q = tmpQ.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, -corr * THREE.MathUtils.DEG2RAD).multiply(sn.quaternion);
   } else if (!sn.hasOrientation) {
     heading = sn.gpsHeading ?? bearingAlong(path, pr.along);
     pitch = -5;
@@ -1058,6 +1078,24 @@ $('pin-go').onclick = () => { if (S.pin?.indoor) chooseIndoor(S.pin.indoor); els
 for (const t of document.querySelectorAll('#map-tabs [data-map]')) t.onclick = () => setMapTab(t.dataset.map);
 $('plan-floor').onchange = () => { $('pin-card').hidden = true; showPlanMap(); };
 $('leave-building').onclick = () => leaveBuilding();
+
+// Manual alignment: drag sideways to rotate the trail onto the road (works in WebXR and the overlay).
+$('align-btn').onclick = () => { $('align-layer').hidden = false; S.aligning = true; };
+$('align-done').onclick = () => { $('align-layer').hidden = true; S.aligning = false; toast('Trail aligned ✓', 1200); };
+{
+  let lastX = null;
+  const layer = $('align-layer');
+  layer.addEventListener('pointerdown', e => { if (e.target.closest('.align-card')) return; lastX = e.clientX; layer.setPointerCapture(e.pointerId); });
+  layer.addEventListener('pointermove', e => {
+    if (lastX == null) return;
+    const deg = (e.clientX - lastX) * 0.15; // drag right → trail swings right
+    lastX = e.clientX;
+    if (S.useXR) S.aligner?.rotate(-deg);
+    else { S.yawFix -= deg; S.yawLocked = true; }
+  });
+  layer.addEventListener('pointerup', () => lastX = null);
+  layer.addEventListener('pointercancel', () => lastX = null);
+}
 $('spot-go').onclick = () => { $('spot-card').hidden = true; if (S.spot) pickOnMap(S.spot.pos, S.spot.floor); };
 $('spot-cancel').onclick = () => $('spot-card').hidden = true;
 $('share-btn').onclick = () => openShare();

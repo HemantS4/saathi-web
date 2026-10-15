@@ -70,7 +70,7 @@ export class XRSession {
     });
     // Let the HUD (buttons, map) receive touches without also firing select.
     this.overlayRoot.addEventListener('beforexrselect', e => {
-      if (e.target.closest('button, a, .map-frame, .card-dark, input')) e.preventDefault();
+      if (e.target.closest('button, a, .map-frame, .card-dark, input, .align-layer')) e.preventDefault();
     });
 
     session.addEventListener('end', () => {

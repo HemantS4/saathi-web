@@ -162,6 +162,9 @@
         <span>trail</span>
         <button id="height-down" aria-label="Trail lower">▼</button>
       </div>
+      <button id="align-btn" class="tool-btn card-dark" aria-label="Line up the trail with the road">
+        <svg viewBox="0 0 24 24"><path d="M12 3v18M5 8l-3 4 3 4M19 8l3 4-3 4"/></svg><small>Align</small>
+      </button>
       <button id="rescan-btn" class="rescan card-dark" aria-label="Scan a Saathi point">
         <svg viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>
       </button>
@@ -190,6 +193,13 @@
       <div id="remaining" class="muted-light">— · —</div>
     </div>
 
+    <div id="align-layer" class="align-layer" hidden>
+      <div class="align-arrows"><span>◀</span><span>drag</span><span>▶</span></div>
+      <div class="align-card card-dark">
+        <div><b>Line up the trail</b><small>Drag left or right until the green trail lies along the road you need to walk.</small></div>
+        <button id="align-done" class="btn btn-primary btn-small">Done</button>
+      </div>
+    </div>
     <div id="spot-card" class="spot-card card-dark" hidden>
       <span>Go to this spot instead?</span>
       <button id="spot-cancel" class="link-btn light">No</button>

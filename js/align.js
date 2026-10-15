@@ -31,11 +31,14 @@ export class Aligner {
     this._pin(camera.position, local, 1);
     this.ready = true;
     this._track = [];
+    this._walk = null;
+    this._learned = false;
+    this.headingLocked = false;
   }
 
   /** Compass reading while in XR (if the browser still delivers it). Slow blend: compasses are noisy. */
   compass(camera, heading, weight = 0.01) {
-    if (!this.ready || !Number.isFinite(heading)) return;
+    if (!this.ready || this.headingLocked || !Number.isFinite(heading)) return;
     const want = heading - Aligner.yawOf(camera);
     this.theta += angleDiff(this.theta, want) * weight;
   }
@@ -46,7 +49,7 @@ export class Aligner {
     const k = Math.min(0.35, Math.max(0.03, 4 / Math.max(4, accuracy)));
     this._pin(camera.position, local, k);
 
-    if (accuracy > 15) return;
+    if (accuracy > 15 || this.headingLocked) return;
     this._track.push({ xr: { x: camera.position.x, z: camera.position.z }, loc: { ...local } });
     if (this._track.length > 30) this._track.shift();
     const a = this._track[0], b = this._track[this._track.length - 1];
@@ -58,6 +61,31 @@ export class Aligner {
       this._track = this._track.slice(-5);
     }
   }
+
+  /**
+   * Learns the heading from the road itself: when you've walked a few metres while staying on the route, the direction
+   * you moved in XR must be the route's bearing there. Ignores big disagreements (crossing the street, side steps).
+   */
+  walkAlong(camera, routeBearing) {
+    if (!this.ready || this.headingLocked) return;
+    const p = { x: camera.position.x, z: camera.position.z };
+    if (!this._walk) { this._walk = p; return; }
+    const dx = p.x - this._walk.x, dz = p.z - this._walk.z;
+    if (Math.hypot(dx, dz) < 4) return;
+    this._walk = p;
+    const moveYaw = Math.atan2(dx, -dz) / D2R;
+    const err = angleDiff(this.theta, routeBearing - moveYaw);
+    if (Math.abs(err) < 70) {
+      this.theta += err * (this._learned ? 0.3 : 0.8); // first good sample: trust it a lot
+      this._learned = true;
+    }
+  }
+
+  /** Keeps the trail starting at your feet: slowly slides the route so your position lies on it. */
+  pinTo(camera, local, k = 0.02) { if (this.ready) this._pin(camera.position, local, k); }
+
+  /** Manual alignment (drag to rotate the trail). Locks out automatic heading changes. */
+  rotate(deg) { this.theta += deg; this.headingLocked = true; }
 
   /** Hard re-anchor (indoor QR re-scan). */
   reanchor(camera, local, heading) { this.init(camera, local, heading); }
