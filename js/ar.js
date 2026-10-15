@@ -1,6 +1,7 @@
-// AR overlay rendered with three.js on top of the camera video.
-// World frame: x = East, y = Up, z = -North (metres). The user stands at the origin; route content
-// lives in `world`, which is shifted by the user's position every frame.
+// AR content rendered with three.js. Route content lives in `world` in local metres (x = east, y = up, z = -north),
+// with y = 0 on the ground. Two modes:
+//  • WebXR (Android): the session drives the camera; app.js places `world` with the Aligner at the detected ground.
+//  • Overlay (iOS / no WebXR): camera at the origin, oriented by the compass; `world` shifted by the GPS position.
 
 import * as THREE from 'three';
 import { CONFIG } from './config.js';
@@ -43,6 +44,7 @@ export class ARScene {
   }
 
   resize() {
+    if (this.renderer.xr.isPresenting) return; // the XR session owns the framebuffer size
     const w = innerWidth, h = innerHeight;
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
@@ -62,7 +64,7 @@ export class ARScene {
       coin.rotation.x = Math.PI / 2;
       const holder = new THREE.Group();
       holder.add(coin);
-      holder.position.set(p.x, -CONFIG.eyeHeight + 1.05, -p.y);
+      holder.position.set(p.x, 1.05, -p.y);
       holder.rotation.y = Math.atan2(dir.x, dir.y);
       holder.userData = { along: d, collected: false, phase: Math.random() * 6, t: -1, local: p };
       this.world.add(holder);
@@ -75,7 +77,7 @@ export class ARScene {
       const dx = ahead.x - at.x, dy = ahead.y - at.y;
       if (Math.hypot(dx, dy) < 0.5) continue;
       const a = new THREE.Mesh(this.arrowGeo, this.arrowMat);
-      a.position.set(at.x, -CONFIG.eyeHeight + 1.9, -at.y);
+      a.position.set(at.x, 1.9, -at.y);
       a.rotation.y = -Math.atan2(dx, dy); // geometry points north (-z); yaw by the outgoing bearing
       a.userData.baseY = a.position.y;
       this.world.add(a);
@@ -97,12 +99,20 @@ export class ARScene {
   }
 
   /** Returns number of coins collected this frame. */
-  update(dt, userLocal, along, quaternion) {
+  /**
+   * quaternion: camera orientation for the GPS/compass overlay; pass null in WebXR (the session drives the camera and
+   * the caller positions the world group with the Aligner). groundY: ground height relative to the camera in overlay mode.
+   */
+  update(dt, userLocal, along, quaternion, groundY = -CONFIG.eyeHeight) {
     this.time += dt;
     this.user = userLocal;
     this.along = along;
-    this.camera.quaternion.copy(quaternion);
-    this.world.position.set(-userLocal.x, 0, userLocal.y);
+    if (quaternion) {
+      this.camera.position.set(0, 0, 0);
+      this.camera.quaternion.copy(quaternion);
+      this.world.rotation.set(0, 0, 0);
+      this.world.position.set(-userLocal.x, groundY, userLocal.y);
+    }
     if (!this.path) return 0;
 
     this.updateTrail();
@@ -119,7 +129,7 @@ export class ARScene {
         continue;
       }
       coin.rotation.z += dt * 3;
-      c.position.y = -CONFIG.eyeHeight + 1.05 + Math.sin(this.time * 2 + u.phase) * 0.08;
+      c.position.y = 1.05 + Math.sin(this.time * 2 + u.phase) * 0.08;
       const d = Math.hypot(u.local.x - userLocal.x, u.local.y - userLocal.y);
       c.visible = d < 70;
       // Walking past it on the route counts too (GPS rarely puts you exactly on top of it).
@@ -147,7 +157,7 @@ export class ARScene {
       }
       const { p } = this.path.at(d);
       const a = this.path.at(Math.max(0, d - 1)).p, b = this.path.at(Math.min(this.path.length, d + 1)).p;
-      m.position.set(p.x, -CONFIG.eyeHeight + 0.03, -p.y);
+      m.position.set(p.x, 0.03, -p.y);
       m.rotation.set(-Math.PI / 2, 0, Math.atan2(-(b.x - a.x), b.y - a.y));
       const rel = d - this.along;
       const fade = Math.min(1, (rel + 2) / 3) * Math.min(1, (CONFIG.trailAhead - rel) / 12);
@@ -167,11 +177,12 @@ export class ARScene {
     const d = Math.hypot(dx, dy);
     // Far away: pull the pin in to 60 m and scale it up so it stays visible over the rooftops.
     const show = Math.min(d, 60), k = d > 0 ? show / d : 0;
-    const scale = Math.max(1, show / 25); // roughly constant on-screen size once it's parked at 60 m
-    this.pin.group.position.set(this.user.x + dx * k, -CONFIG.eyeHeight, -(this.user.y + dy * k));
+    const scale = (this.pinScale ?? 1) * Math.max(1, show / 25); // roughly constant on-screen size once parked at 60 m
+    this.pin.group.position.set(this.user.x + dx * k, 0, -(this.user.y + dy * k));
     this.pin.group.scale.setScalar(scale);
     this.pin.head.rotation.y += 0.03;
-    this.pin.label.quaternion.copy(this.camera.quaternion);
+    // Face the camera: undo the world group's rotation so the label's world orientation equals the camera's.
+    this.pin.label.quaternion.copy(this.pin.group.getWorldQuaternion(new THREE.Quaternion()).invert()).multiply(this.camera.quaternion);
     if (Math.abs(d - this.pin.shownDist) > 5) this.pin.setLabel(this.pin.name, d);
   }
 
@@ -179,6 +190,12 @@ export class ARScene {
   tap(clientX, clientY) {
     const ndc = new THREE.Vector2((clientX / innerWidth) * 2 - 1, -(clientY / innerHeight) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.camera);
+    return this.tapRay(this.raycaster);
+  }
+
+  /** Collects the first coin hit by a ray (WebXR screen taps). */
+  tapRay(raycaster) {
+    this.raycaster = raycaster;
     const hits = this.raycaster.intersectObjects(this.coins.filter(c => c.visible && !c.userData.collected), true);
     if (!hits.length) return false;
     let h = hits[0].object;

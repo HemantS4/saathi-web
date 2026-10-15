@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Saathi indoor map editor</title>
+  <meta name="description" content="Set up indoor AR navigation for a building: floor plans, walkways, destinations and Saathi point QR codes.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Gelasio:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    body { background: var(--paper); overflow: hidden; }
+    .ed { display: grid; grid-template-columns: 320px 1fr; height: 100vh; }
+    @media (max-width: 860px) { .ed { grid-template-columns: 1fr; grid-template-rows: auto 1fr; height: auto; } body { overflow: auto; } #stage { height: 70vh; } }
+    aside { background: #fff; border-right: 1px solid #e6e3dc; padding: 18px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+    aside h1 { font-family: var(--serif); font-size: 24px; margin: 4px 0 0; }
+    aside p { margin: 0; font-size: 13px; color: var(--muted); line-height: 1.45; }
+    fieldset { border: 1px solid #ebe8e1; border-radius: 14px; padding: 12px; margin: 0; display: grid; gap: 8px; }
+    legend { font-weight: 700; font-size: 13px; padding: 0 6px; }
+    label { font-size: 13px; font-weight: 600; display: grid; gap: 4px; }
+    input, select { font: inherit; font-size: 14px; padding: 8px 10px; border-radius: 10px; border: 1.5px solid #dcdad4; background: #fbfaf8; width: 100%; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .row > * { flex: 1; }
+    .tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    .tool { border: 1.5px solid #dcdad4; background: #fbfaf8; border-radius: 12px; padding: 9px 4px; font-size: 12.5px; font-weight: 600; }
+    .tool.on { background: var(--green); border-color: var(--green); color: #fff; }
+    .sbtn { border: 0; border-radius: 12px; padding: 10px; font-weight: 600; font-size: 14px; background: #efede7; }
+    .sbtn.primary { background: var(--green); color: #fff; }
+    #hint { background: #f3faf5; color: #1d6b3c; border-radius: 12px; padding: 10px 12px; font-size: 13px; line-height: 1.4; }
+    #stage { position: relative; overflow: hidden; background: #e9e6df; }
+    #cv { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+    .empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); text-align: center; padding: 24px; pointer-events: none; }
+    #list { font-size: 13px; display: grid; gap: 4px; max-height: 180px; overflow: auto; }
+    #list div { display: flex; justify-content: space-between; gap: 6px; padding: 5px 8px; background: #faf9f6; border-radius: 8px; }
+    #list small { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="ed">
+    <aside>
+      <header class="brand"><span class="brand-dot"></span><span>Saathi</span></header>
+      <h1>Indoor map editor</h1>
+      <p>1. Add a floor plan &amp; set its scale. 2. Draw walkways. 3. Mark destinations, lifts and Saathi points. 4. Export, then print the Saathi point QRs and stick them on the walls.</p>
+
+      <fieldset>
+        <legend>Building</legend>
+        <label>Name <input id="b-name" value="My Building"></label>
+        <label>Short id <small style="font-weight:400;color:var(--muted)">(used in links)</small><input id="b-id" value="my-building"></label>
+        <div class="row"><button id="load-demo" class="sbtn">Open demo mall</button><label class="sbtn" style="text-align:center;cursor:pointer">Import JSON<input id="import" type="file" accept=".json" hidden></label></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Floors</legend>
+        <div class="row"><select id="floor-sel"></select><button id="floor-add" class="sbtn" style="flex:0 0 auto">+ Floor</button></div>
+        <label>Floor name <input id="floor-name" placeholder="Ground floor"></label>
+        <label>Floor plan image <input id="floor-img" type="file" accept="image/*"></label>
+        <button id="scale-btn" class="sbtn">Set scale (click 2 points)</button>
+        <p id="scale-info"></p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Draw</legend>
+        <div class="tools">
+          <button class="tool on" data-tool="walk">Walkway</button>
+          <button class="tool" data-tool="place">Destination</button>
+          <button class="tool" data-tool="anchor">Saathi point</button>
+          <button class="tool" data-tool="lift">Lift / stairs</button>
+          <button class="tool" data-tool="move">Move</button>
+          <button class="tool" data-tool="erase">Erase</button>
+        </div>
+        <div id="hint"></div>
+        <div id="list"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Publish</legend>
+        <label>Saathi site address <input id="base" placeholder="https://you.github.io/saathi-web/"></label>
+        <button id="preview" class="sbtn">Preview in simulator</button>
+        <button id="export" class="sbtn primary">Download building file</button>
+        <button id="posters" class="sbtn">Download Saathi point QRs</button>
+        <p>Put the building file (and floor images if not embedded) in the <b>buildings/</b> folder of your site.</p>
+      </fieldset>
+    </aside>
+    <main id="stage">
+      <canvas id="cv"></canvas>
+      <div id="empty" class="empty">Add a floor plan image to start, or open the demo mall.</div>
+    </main>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+  <script type="module" src="js/indoor-editor.js"></script>
+</body>
+</html>

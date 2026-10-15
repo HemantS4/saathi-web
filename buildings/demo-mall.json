@@ -1,0 +1,334 @@
+{
+ "id": "demo-mall",
+ "name": "Saathi Demo Mall",
+ "floors": [
+  {
+   "id": "G",
+   "name": "Ground floor",
+   "level": 0,
+   "image": "demo-mall-G.svg",
+   "widthM": 60,
+   "heightM": 36
+  },
+  {
+   "id": "1",
+   "name": "First floor",
+   "level": 1,
+   "image": "demo-mall-1.svg",
+   "widthM": 60,
+   "heightM": 36
+  }
+ ],
+ "nodes": [
+  {
+   "id": "g-ent",
+   "floor": "G",
+   "x": 30,
+   "y": 2
+  },
+  {
+   "id": "g-c1",
+   "floor": "G",
+   "x": 30,
+   "y": 10
+  },
+  {
+   "id": "g-x",
+   "floor": "G",
+   "x": 30,
+   "y": 18
+  },
+  {
+   "id": "g-w1",
+   "floor": "G",
+   "x": 20,
+   "y": 18
+  },
+  {
+   "id": "g-w2",
+   "floor": "G",
+   "x": 8,
+   "y": 18
+  },
+  {
+   "id": "g-e1",
+   "floor": "G",
+   "x": 40,
+   "y": 18
+  },
+  {
+   "id": "g-lift",
+   "floor": "G",
+   "x": 52,
+   "y": 18,
+   "kind": "lift"
+  },
+  {
+   "id": "g-rest",
+   "floor": "G",
+   "x": 38,
+   "y": 10
+  },
+  {
+   "id": "g-ph",
+   "floor": "G",
+   "x": 20,
+   "y": 12
+  },
+  {
+   "id": "g-mob",
+   "floor": "G",
+   "x": 8,
+   "y": 12
+  },
+  {
+   "id": "g-shoe",
+   "floor": "G",
+   "x": 50,
+   "y": 12
+  },
+  {
+   "id": "g-c2",
+   "floor": "G",
+   "x": 30,
+   "y": 24
+  },
+  {
+   "id": "f-lift",
+   "floor": "1",
+   "x": 52,
+   "y": 18,
+   "kind": "lift"
+  },
+  {
+   "id": "f-e1",
+   "floor": "1",
+   "x": 40,
+   "y": 18
+  },
+  {
+   "id": "f-x",
+   "floor": "1",
+   "x": 30,
+   "y": 18
+  },
+  {
+   "id": "f-w1",
+   "floor": "1",
+   "x": 20,
+   "y": 18
+  },
+  {
+   "id": "f-w2",
+   "floor": "1",
+   "x": 10,
+   "y": 18
+  },
+  {
+   "id": "f-book",
+   "floor": "1",
+   "x": 9,
+   "y": 12
+  },
+  {
+   "id": "f-play",
+   "floor": "1",
+   "x": 21,
+   "y": 12
+  },
+  {
+   "id": "f-toy",
+   "floor": "1",
+   "x": 45,
+   "y": 12
+  }
+ ],
+ "edges": [
+  [
+   "g-ent",
+   "g-c1"
+  ],
+  [
+   "g-c1",
+   "g-x"
+  ],
+  [
+   "g-x",
+   "g-w1"
+  ],
+  [
+   "g-w1",
+   "g-w2"
+  ],
+  [
+   "g-x",
+   "g-e1"
+  ],
+  [
+   "g-e1",
+   "g-lift"
+  ],
+  [
+   "g-c1",
+   "g-rest"
+  ],
+  [
+   "g-w1",
+   "g-ph"
+  ],
+  [
+   "g-w2",
+   "g-mob"
+  ],
+  [
+   "g-e1",
+   "g-shoe"
+  ],
+  [
+   "g-x",
+   "g-c2"
+  ],
+  [
+   "g-lift",
+   "f-lift"
+  ],
+  [
+   "f-lift",
+   "f-e1"
+  ],
+  [
+   "f-e1",
+   "f-x"
+  ],
+  [
+   "f-x",
+   "f-w1"
+  ],
+  [
+   "f-w1",
+   "f-w2"
+  ],
+  [
+   "f-w2",
+   "f-book"
+  ],
+  [
+   "f-w1",
+   "f-play"
+  ],
+  [
+   "f-e1",
+   "f-toy"
+  ]
+ ],
+ "places": [
+  {
+   "id": "rahman",
+   "name": "Rahman Stores",
+   "node": "g-w2",
+   "category": "Kirana",
+   "offer": "10% Off"
+  },
+  {
+   "id": "fresh",
+   "name": "Fresh Mart",
+   "node": "g-w1",
+   "category": "Groceries",
+   "offer": "Free juice"
+  },
+  {
+   "id": "food",
+   "name": "Food Court",
+   "node": "g-c2",
+   "category": "Food"
+  },
+  {
+   "id": "gupta",
+   "name": "Gupta Chaat",
+   "node": "g-e1",
+   "category": "Street food",
+   "offer": "Buy 1 Get 1"
+  },
+  {
+   "id": "rest",
+   "name": "Restrooms",
+   "node": "g-rest",
+   "category": "Facilities"
+  },
+  {
+   "id": "pharmacy",
+   "name": "Pharmacy",
+   "node": "g-ph",
+   "category": "Health"
+  },
+  {
+   "id": "mobile",
+   "name": "Mobile Hub",
+   "node": "g-mob",
+   "category": "Electronics"
+  },
+  {
+   "id": "shoe",
+   "name": "Shoe Box",
+   "node": "g-shoe",
+   "category": "Footwear"
+  },
+  {
+   "id": "lift",
+   "name": "Lift",
+   "node": "g-lift",
+   "category": "Facilities"
+  },
+  {
+   "id": "cinema",
+   "name": "Cinema",
+   "node": "f-w2",
+   "category": "Entertainment"
+  },
+  {
+   "id": "cafe",
+   "name": "Saathi Café",
+   "node": "f-e1",
+   "category": "Café",
+   "offer": "Free cookie"
+  },
+  {
+   "id": "books",
+   "name": "Book Nook",
+   "node": "f-book",
+   "category": "Books"
+  },
+  {
+   "id": "play",
+   "name": "Play Zone",
+   "node": "f-play",
+   "category": "Kids"
+  },
+  {
+   "id": "toys",
+   "name": "Toy Town",
+   "node": "f-toy",
+   "category": "Toys"
+  }
+ ],
+ "anchors": [
+  {
+   "id": "A1",
+   "name": "Main entrance",
+   "node": "g-ent",
+   "heading": 0
+  },
+  {
+   "id": "A2",
+   "name": "Food court",
+   "node": "g-c2",
+   "heading": 180
+  },
+  {
+   "id": "A3",
+   "name": "First floor lift lobby",
+   "node": "f-lift",
+   "heading": 270
+  }
+ ]
+}

@@ -101,6 +101,34 @@ export class NavMap {
     this.map.on('dragstart', () => { this.follow = false; this.onFollowChange?.(false); });
   }
 
+  /**
+   * Floor plan instead of a street map. Plan metres are used as {lat: y, lng: x} in Leaflet's flat CRS, so every
+   * other method (setRoute, update, setDest…) works unchanged with indoor coordinates.
+   */
+  async initIndoor(building, floor, start, dest) {
+    const L = await loadLeaflet();
+    this.kind = 'leaflet';
+    this.indoor = true;
+    const bounds = [[0, 0], [floor.heightM, floor.widthM]];
+    if (!this.map) {
+      this.map = L.map(this.el, { crs: L.CRS.Simple, zoomControl: false, attributionControl: false, minZoom: -2, maxZoom: 5, zoomSnap: 0.25 });
+      this.casing = L.polyline([], { color: '#fff', weight: 11, opacity: 1 }).addTo(this.map);
+      this.line = L.polyline([], { color: '#1fae5b', weight: 6, opacity: 1 }).addTo(this.map);
+      const icon = el => L.divIcon({ html: el.outerHTML, className: '', iconSize: [40, 40], iconAnchor: [20, 20] });
+      this.userMarker = L.marker([start.lat, start.lng], { icon: icon(userArrowHtml()), zIndexOffset: 1000 }).addTo(this.map);
+      this.destMarker = L.marker([dest.lat, dest.lng], {
+        icon: L.divIcon({ html: destPinHtml(dest.name).outerHTML, className: '', iconSize: [34, 44], iconAnchor: [17, 44] }),
+      }).addTo(this.map);
+      this.map.on('dragstart', () => { this.follow = false; this.onFollowChange?.(false); });
+    }
+    this.plan?.remove();
+    this.plan = L.imageOverlay(building.imageUrl(floor), bounds).addTo(this.map);
+    this.plan.bringToBack();
+    this.map.fitBounds(bounds);
+    this.map.setView([start.lat, start.lng], 2);
+    return this;
+  }
+
   setRoute(points) {
     if (this.kind === 'google') { this.casing.setPath(points); this.line.setPath(points); }
     else if (this.kind === 'leaflet') {

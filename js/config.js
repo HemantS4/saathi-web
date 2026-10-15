@@ -23,7 +23,14 @@ export const CONFIG = {
   coinValue: 10,
   trailAhead: 45,
   chevronSpacing: 2.5,
-  eyeHeight: 1.5,
+  eyeHeight: 1.5,           // overlay mode only (no ground detection); users can nudge it with the ▲▼ buttons
+
+  // WebXR AR (Android Chrome with ARCore): real ground detection + motion tracking. Falls back automatically.
+  useWebXR: true,
+
+  // Indoor (Saathi points + floor plans in /buildings)
+  indoorArrivalRadius: 3,
+  stepLength: 0.7,          // metres per step when counting steps (no WebXR)
 
   // Free fallback walking router (OSRM, OpenStreetMap data) used when Google isn't configured or fails.
   osrmFootUrl: 'https://routing.openstreetmap.de/routed-foot/route/v1/foot/',

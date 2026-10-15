@@ -20,6 +20,10 @@ export async function requestPermissions() {
     try { result.motion = (await DeviceOrientationEvent.requestPermission()) === 'granted'; }
     catch { result.motion = false; }
   }
+  // Step counting (indoors) needs devicemotion; on iOS this resolves immediately once orientation was allowed.
+  if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+    try { await DeviceMotionEvent.requestPermission(); } catch { /* step counting unavailable */ }
+  }
   return result;
 }
 
@@ -105,6 +109,36 @@ export class Sensors {
 
   stop() {
     if (this._watch != null) navigator.geolocation.clearWatch(this._watch);
+  }
+}
+
+/**
+ * Step counter from the accelerometer (for indoor walking without WebXR tracking).
+ * Detects peaks in the acceleration magnitude; onStep() is called per step.
+ */
+export class Pedometer {
+  constructor(onStep) {
+    this.onStep = onStep;
+    this.steps = 0;
+    this._avg = 9.8;
+    this._last = 0;
+    this._above = false;
+    this._handler = e => this._motion(e);
+  }
+  start() { addEventListener('devicemotion', this._handler); }
+  stop() { removeEventListener('devicemotion', this._handler); }
+  _motion(e) {
+    const a = e.accelerationIncludingGravity;
+    if (!a || a.x == null) return;
+    const m = Math.hypot(a.x, a.y, a.z);
+    this._avg += (m - this._avg) * 0.05;          // slow baseline (gravity)
+    const now = performance.now();
+    if (!this._above && m > this._avg + 1.6 && now - this._last > 280) {
+      this._above = true;
+      this._last = now;
+      this.steps++;
+      this.onStep?.(this.steps);
+    } else if (this._above && m < this._avg + 0.4) this._above = false;
   }
 }
 

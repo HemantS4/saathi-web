@@ -15,6 +15,7 @@ QR code  ──►  https://your-site/?d=28.632650,77.218350&n=Rahman+Stores&p=<
 | Page | For | What it does |
 |---|---|---|
 | `index.html` | everyone | **No destination in the link → "Where to?"**: search any place (Google Places, or free OpenStreetMap search), paste a Google Maps link or coordinates, drop a pin on the map, or pick a recent. **With a destination** → landing card, AR navigation, tilt-down map, voice, arrival screen. "Change destination" and a **Share / QR** button for any place. |
+| `indoor.html` | building managers | Indoor map editor: floor plans, walkways, destinations, lifts, Saathi point QR posters |
 | `create.html` | shop owners | Search the shop on Google Maps (or paste a Maps link / coordinates), add an offer, then download the QR or a printable poster |
 
 ## Navigate anywhere
@@ -44,6 +45,33 @@ With the key you get Google walking directions with street names, the Google map
 QR maker, and the shop's real photo, rating and opening hours. **Without a key** everything still works on free OpenStreetMap
 routing (OSRM) and map tiles.
 
+## Ground detection (WebXR)
+On **Android Chrome** (ARCore phones) navigation runs as a **WebXR AR session**:
+- The camera **finds the real ground**: point the phone at the floor or road until the green ring settles, and the chevrons
+  and coins sit on it.
+- ARCore **tracks the phone's movement**, so the trail stays locked in place between GPS fixes instead of drifting.
+- GPS + compass only register the route to the world, refined by the direction you actually walk.
+
+**iPhone Safari has no WebXR**, so it uses the camera overlay with the ground assumed at phone height. Use the ▲▼ *trail*
+buttons on the right to nudge the trail onto the ground (remembered per phone). Turn WebXR off with `useWebXR: false`
+in `js/config.js`.
+
+## Indoor navigation
+GPS doesn't work inside buildings, so indoors uses **Saathi points**: QR codes on the walls at known spots.
+1. Open **`indoor.html`** (the indoor map editor):
+   - add a floor plan image and set its scale (click two points a known distance apart)
+   - draw walkways along the corridors
+   - mark destinations, lifts/stairs (connect them across floors) and Saathi points, including which way people face when they scan
+2. **Download building file** → put it in `buildings/<id>.json` on your site. Floor images are embedded in it.
+3. **Download Saathi point QRs** → print and stick them up (entrances, lift lobbies, big junctions).
+4. A visitor scans a Saathi point → picks a shop or room → follows the green trail:
+   - **Android (WebXR)**: tracking from the scanned spot, accurate to about a metre indoors
+   - **iPhone**: compass + step counting along the route. Re-scan any Saathi point (the scan button) to correct
+   - **Changing floors**: "Take the lift to First floor", then scan the point there and it continues automatically
+
+Try the demo: `/?b=demo-mall&a=A1&sim=1` (entrance) → pick *Cinema* to see a floor change, then open `/?b=demo-mall&a=A3&sim=1`.
+Saathi point link format: `?b=<building id>&a=<point id>[&to=<place id>]`.
+
 ## How the AR works
 - **Position**: `navigator.geolocation.watchPosition` with high accuracy, smoothed by an accuracy-weighted filter and gently snapped
   onto the route so the trail stays under your feet.
@@ -71,7 +99,12 @@ To test on a phone without deploying, use an HTTPS tunnel (for example `cloudfla
 index.html, create.html, css/style.css
 js/config.js    settings: Google key, language, tuning
 js/app.js       flow, frame loop, HUD, voice, arrival
-js/sensors.js   camera, GPS, compass → camera orientation; desktop simulator
+js/sensors.js   camera, GPS, compass → camera orientation; step counter; desktop simulator
+js/xr.js        WebXR session, hit-test ground detection
+js/align.js     registers route coordinates to the WebXR world (GPS/compass/walk direction or Saathi point)
+js/indoor.js    building file model, shortest path, per-floor legs
+js/indoor-editor.js  indoor map editor
+buildings/      building files + floor plans (demo mall included)
 js/ar.js        three.js scene: trail, coins, arrows, shop pin
 js/routing.js   Google Routes API → OSRM → straight line
 js/map.js       Google Maps JS (vector, heading-up) or Leaflet/OSM; Places details

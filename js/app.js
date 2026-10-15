@@ -6,13 +6,19 @@ import { placeFromUrl, googleMapsNavUrl, isValid, parseGoogleMaps, isShortMapsLi
 import { suggest, resolve, reverseGeocode, recents, addRecent, quietPosition } from './search.js';
 import { Path, toLocal, fromLocal, haversine, bearing, angleDiff, formatDistance, formatDuration } from './geo.js';
 import { computeRoute, shortManeuver, maneuverIconPath } from './routing.js';
-import { Sensors, SimSensors, startCamera, requestPermissions, isMobile } from './sensors.js';
+import { Sensors, SimSensors, Pedometer, startCamera, requestPermissions, isMobile } from './sensors.js';
+import { XRSession, xrSupported } from './xr.js';
+import { Aligner } from './align.js';
+import { loadBuilding } from './indoor.js';
 import { ARScene } from './ar.js';
 import { NavMap, loadPlaceDetails } from './map.js';
 
 const $ = id => document.getElementById(id);
-const SIM = new URLSearchParams(location.search).has('sim');
-let place = placeFromUrl();
+const QS = new URLSearchParams(location.search);
+const SIM = QS.has('sim');
+// Indoor links come from Saathi point QR codes: ?b=<building>&a=<anchor>[&to=<place>]
+const INDOOR = QS.has('b');
+let place = INDOOR ? null : placeFromUrl();
 
 const S = {
   sensors: null, ar: null, map: null, stream: null, wakeLock: null,
@@ -20,6 +26,7 @@ const S = {
   announced: -1, offRouteSince: 0, rerouting: false, running: false,
   tripPoints: 0, voice: localStorage.getItem('saathi_voice') !== 'off',
   mapExpanded: false, mapManual: false, last: 0, arrived: false,
+  eyeHeight: +localStorage.getItem('saathi_eye') || CONFIG.eyeHeight,
 };
 
 // ───────────── Screens ─────────────
@@ -34,7 +41,11 @@ function loading(title, detail = '') {
   show('loading');
 }
 
-function fail(message) {
+function fail(message, title = 'Oops!') {
+  $('error').querySelector('h2').textContent = title;
+  $('retry-btn').textContent = 'Try again';
+  $('retry-btn').onclick = () => location.reload();
+  $('retry-btn').hidden = false;
   $('error-text').textContent = message;
   if (place && (isValid(place) || place.placeId)) $('error-gmaps').href = googleMapsNavUrl(place);
   else $('error-gmaps').hidden = true;
@@ -63,6 +74,7 @@ function say(text, interrupt = true) {
 
 async function initLanding() {
   $('brand-name').textContent = CONFIG.brand;
+  if (INDOOR && !S.building) { await initIndoor(); return; }
   if (!place) { showSearch(); return; }
   resetLandingCard();
   document.title = `${place.name} – ${CONFIG.brand}`;
@@ -70,8 +82,28 @@ async function initLanding() {
   $('place-initials').textContent = initials(place.name);
   $('place-sub').textContent = place.tagline || '';
   if (place.offer) { $('place-offer').textContent = place.offer; $('place-offer').hidden = false; }
-  $('gmaps-btn').href = googleMapsNavUrl(place);
   show('landing');
+
+  if (place.indoor) {
+    // Indoors: floor plan instead of a street map; start point comes from the scanned Saathi point.
+    $('gmaps-btn').hidden = $('share-btn').hidden = true;
+    $('rescan-landing').hidden = false;
+    $('place-meta').innerHTML = S.anchor ? `Starting from <b>${escapeHtml(S.anchor.name)}</b>` : 'Scan a Saathi point QR first';
+    $('place-meta').hidden = false;
+    $('start-btn').disabled = !S.anchor;
+    const floor = S.building.floor(place.floor);
+    const dest = { lat: place.y, lng: place.x, name: place.name };
+    const startNode = S.anchor && S.building.nodes.get(S.anchor.node);
+    S.landingMap ||= new NavMap($('landing-map'));
+    await S.landingMap.initIndoor(S.building, floor, startNode ? { lat: startNode.y, lng: startNode.x } : dest, dest);
+    if (!startNode || startNode.floor !== place.floor) S.landingMap.hideUser();
+    S.landingMap.follow = false;
+    return;
+  }
+  $('gmaps-btn').hidden = $('share-btn').hidden = false;
+  $('rescan-landing').hidden = true;
+  $('start-btn').disabled = false;
+  $('gmaps-btn').href = googleMapsNavUrl(place);
 
   if (!isMobile && !SIM) {
     $('desktop-note').hidden = false;
@@ -150,6 +182,7 @@ function choosePlace(p) {
 let searchSeq = 0, searchTimer = 0;
 
 async function showSearch() {
+  if (INDOOR) return showIndoorSearch();
   document.title = `Where to? – ${CONFIG.brand}`;
   show('search');
   renderRecents();
@@ -183,6 +216,7 @@ async function dropPin(pos) {
 }
 
 function onSearchInput() {
+  if (INDOOR) return renderIndoorResults();
   const text = $('search-input').value;
   $('search-clear').hidden = !text;
   clearTimeout(searchTimer);
@@ -255,6 +289,124 @@ function resultItem(s, icon, onPick) {
   return li;
 }
 
+// ───────────── Indoor ─────────────
+
+async function initIndoor() {
+  loading('Loading the building map…');
+  try {
+    S.building = await loadBuilding(QS.get('b'));
+  } catch (e) {
+    fail("Couldn't load this building's map. Check your internet connection, or ask staff for help.");
+    return;
+  }
+  const b = S.building;
+  S.anchor = b.anchor(QS.get('a')) || null;
+  document.body.classList.add('indoor');
+  // Destination: from the QR (?to=), or carried over from before a floor change.
+  const to = QS.get('to') || sessionStorage.getItem('saathi_indoor_' + b.id);
+  const p = to && b.place(to);
+  if (p) { place = indoorPlace(p); initLanding(); return; }
+  showIndoorSearch();
+}
+
+function indoorPlace(p) {
+  const node = S.building.nodes.get(p.node);
+  const floor = S.building.floor(node?.floor);
+  return {
+    id: p.id, name: p.name, offer: p.offer || '', indoor: true,
+    tagline: [p.tagline || p.category, floor?.name].filter(Boolean).join(' · '),
+    x: node?.x, y: node?.y, floor: node?.floor,
+  };
+}
+
+function showIndoorSearch() {
+  const b = S.building;
+  document.title = `${b.name} – ${CONFIG.brand}`;
+  show('search');
+  $('search').classList.add('indoor');
+  $('search-title').textContent = `Where to in ${b.name}?`;
+  $('search-input').placeholder = 'Search shops, rooms, lifts…';
+  $('search-status').textContent = S.anchor
+    ? `You're at: ${S.anchor.name}`
+    : 'Tip: scan a Saathi point QR inside the building so we know where you are.';
+  renderIndoorResults();
+}
+
+function renderIndoorResults() {
+  const q = $('search-input').value.trim().toLowerCase();
+  $('search-clear').hidden = !q;
+  const b = S.building;
+  const here = S.anchor && b.nodes.get(S.anchor.node);
+  const list = b.places
+    .filter(p => !q || p.name.toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q))
+    .map(p => {
+      const n = b.nodes.get(p.node);
+      const route = here && b.shortestPath(S.anchor.node, p.node);
+      let dist;
+      if (route) dist = route.reduce((s, n2, i) => i && n2.floor === route[i - 1].floor ? s + Math.hypot(n2.x - route[i - 1].x, n2.y - route[i - 1].y) : s, 0);
+      return { p, dist, floor: b.floor(n?.floor)?.name };
+    })
+    .sort((a, c) => (a.dist ?? 1e9) - (c.dist ?? 1e9));
+  const ul = $('search-results');
+  ul.innerHTML = '';
+  for (const { p, dist, floor } of list) {
+    ul.appendChild(resultItem({ title: p.name, subtitle: [p.category, floor].filter(Boolean).join(' · '), distance: dist }, PIN_SVG, () => {
+      place = indoorPlace(p);
+      const u = new URL(location.href);
+      u.searchParams.set('to', p.id);
+      history.pushState(null, '', u);
+      initLanding();
+    }));
+  }
+  if (!list.length) $('search-status').textContent = 'Nothing matches that name.';
+}
+
+/** In-app scanner for Saathi point QRs (to re-locate indoors or after changing floors). */
+async function scanSaathiPoint() {
+  stopNav();
+  const sheet = $('scan-sheet'), video = $('scan-video');
+  sheet.hidden = false;
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+    video.srcObject = stream;
+    await video.play();
+  } catch {
+    $('scan-hint').textContent = 'Camera unavailable. Scan the QR with your phone camera app instead.';
+    return;
+  }
+  const detector = 'BarcodeDetector' in window ? new BarcodeDetector({ formats: ['qr_code'] }) : null;
+  if (!detector && !window.jsQR) {
+    await new Promise(res => { const s = document.createElement('script'); s.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js'; s.onload = res; s.onerror = res; document.head.appendChild(s); });
+  }
+  const canvas = document.createElement('canvas'), g = canvas.getContext('2d', { willReadFrequently: true });
+  S.scanning = true;
+  const close = () => { S.scanning = false; stream?.getTracks().forEach(t => t.stop()); sheet.hidden = true; };
+  $('scan-close').onclick = close;
+  while (S.scanning) {
+    await new Promise(r => setTimeout(r, 200));
+    if (!video.videoWidth) continue;
+    let text = null;
+    try {
+      if (detector) text = (await detector.detect(video))[0]?.rawValue;
+      else if (window.jsQR) {
+        canvas.width = 480; canvas.height = Math.round(480 * video.videoHeight / video.videoWidth);
+        g.drawImage(video, 0, 0, canvas.width, canvas.height);
+        text = jsQR(g.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height)?.data;
+      }
+    } catch { /* keep trying */ }
+    if (!text) continue;
+    try {
+      const u = new URL(text);
+      if (!u.searchParams.get('b')) { $('scan-hint').textContent = "That's not a Saathi point. Look for the green Saathi QR."; continue; }
+      close();
+      if (place?.id && !u.searchParams.get('to')) u.searchParams.set('to', place.id);
+      location.href = u.toString(); // reload at the new point; the destination carries over
+      return;
+    } catch { $('scan-hint').textContent = "That QR isn't a Saathi point."; }
+  }
+}
+
 // ───────────── Share ─────────────
 
 function openShare() {
@@ -280,59 +432,151 @@ function drawQr(canvas, text) {
 }
 
 // ───────────── Start ─────────────
+//
+// Four ways to run, picked automatically:
+//   outdoor + WebXR   (Android Chrome): ARCore tracking, real ground detection, GPS/compass only for registration
+//   outdoor overlay   (iPhone / no WebXR): camera video + compass + GPS, ground assumed at eye height
+//   indoor  + WebXR   : starts at the scanned Saathi point, tracking does the rest
+//   indoor  overlay   : starts at the Saathi point, counts steps along the route
 
 async function start() {
-  // iOS needs the motion permission request to be the first thing in the tap handler.
+  // Anything that needs the tap's "user activation" must happen before slow awaits:
+  // iOS motion permission and the WebXR session request.
   const perms = await requestPermissions();
-  loading('Allow camera & location', 'Saathi needs them to show the way.');
+  S.mode = INDOOR ? 'indoor' : 'outdoor';
+  S.useXR = !SIM && CONFIG.useWebXR !== false && await xrSupported();
 
-  S.sensors = SIM ? new SimSensors(fromLocal(place, { x: -140, y: -190 })) : new Sensors();
-  $('nav').classList.toggle('sim', SIM);
+  if (!S.ar) S.ar = new ARScene($('ar'));
+  S.tripPoints = 0;
+  S.arrived = false;
 
-  if (!SIM) {
+  if (S.useXR) {
+    show('nav');
+    $('nav').classList.add('xr');
+    status('Starting AR…');
+    try {
+      S.xr = await new XRSession(S.ar.renderer, S.ar.scene, $('nav')).start();
+    } catch (e) {
+      console.warn('[Saathi] WebXR failed, using camera overlay', e);
+      S.useXR = false;
+      $('nav').classList.remove('xr');
+    }
+  }
+  if (S.useXR) {
+    S.xr.onSelect = rc => { if (S.ar.tapRay(rc)) collect(1); };
+    S.xr.onEnd = () => { if (S.running && !S.arrived) { stopNav(); show('landing'); } };
+    S.aligner = new Aligner();
+  } else if (!SIM) {
+    loading('Allow camera access', `${CONFIG.brand} shows the way through your camera.`);
     try { S.stream = await startCamera($('camera')); }
     catch (e) { console.warn(e); S.noCamera = true; }
   }
+  $('nav').classList.toggle('sim', SIM);
 
-  loading('Finding your location…', 'Step outside if you are indoors.');
   try {
-    await withTimeout(S.sensors.startGPS(), 30000);
+    if (S.mode === 'indoor') await startIndoor();
+    else await startOutdoor();
   } catch (e) {
-    fail(e?.code === 1
-      ? 'Location permission was denied. Allow location for this site in your browser settings and try again.'
-      : "Couldn't get your location. Make sure GPS is on, step outside, and try again.");
+    console.error(e);
+    S.xr?.end();
+    fail(e.userMessage || "Couldn't start navigation. Check your internet connection and try again.");
     return;
   }
-  S.sensors.startOrientation();
 
-  loading('Finding the walking route…');
-  if (!S.ar) S.ar = new ARScene($('ar'));
-  try { await buildRoute(S.sensors.position); }
-  catch (e) { console.error(e); fail("Couldn't plan a route to the shop. Check your internet connection."); return; }
-
-  show('nav');
-  $('dest-name').textContent = place.name;
   setVoiceButton();
-  if (!S.map) {
-    S.map = await new NavMap($('nav-map')).init(S.sensors.position, place);
-    S.map.onFollowChange = f => $('map-recenter').hidden = f;
-  }
-  S.map.setDest(place);
-  S.map.setRoute(S.routePoints);
-  S.map.follow = true;
-
   try { S.wakeLock = await navigator.wakeLock?.request('screen'); } catch { /* optional */ }
   say(`Follow the green trail to ${place.name}. ${formatDistance(S.path.length).replace(' m', ' metres')}.`);
   if (S.noCamera) toast('Camera unavailable - showing directions only', 4000);
   else if (!SIM && !perms.motion) toast('Motion sensors blocked - arrows may be less accurate', 4000);
   else if (SIM) toast('Simulator: drag to look around · W/S speed · M map', 5000);
 
-  S.arrived = false;
-  S.tripPoints = 0;
   updatePoints(0);
   S.running = true;
   S.last = performance.now();
-  requestAnimationFrame(loop);
+  if (S.useXR) S.ar.renderer.setAnimationLoop((t, frame) => xrLoop(t, frame));
+  else requestAnimationFrame(loop);
+}
+
+function userError(msg) { const e = new Error(msg); e.userMessage = msg; return e; }
+
+async function startOutdoor() {
+  S.sensors = SIM ? new SimSensors(fromLocal(place, { x: -140, y: -190 })) : new Sensors();
+  if (S.useXR) status('Finding your location…', 'Keep the camera pointed at the street.');
+  else loading('Finding your location…', 'Step outside if you are indoors.');
+  try {
+    await withTimeout(S.sensors.startGPS(), 30000);
+  } catch (e) {
+    throw userError(e?.code === 1
+      ? 'Location permission was denied. Allow location for this site in your browser settings and try again.'
+      : "Couldn't get your location. Make sure GPS is on, step outside, and try again.");
+  }
+  S.sensors.startOrientation();
+
+  if (S.useXR) status('Finding the walking route…');
+  else loading('Finding the walking route…');
+  await buildRoute(S.sensors.position);
+
+  if (S.useXR) {
+    // Every GPS fix nudges the registration; between fixes ARCore tracking keeps the trail still.
+    S.sensors.onPosition = (pos, acc) => {
+      if (S.aligner?.ready) S.aligner.gps(S.ar.camera, toLocal(S.path.origin, pos), acc);
+    };
+  }
+  await openNav(S.sensors.position);
+}
+
+async function startIndoor() {
+  const b = S.building;
+  const anchor = S.anchor;
+  if (!anchor) throw userError('Scan a Saathi point QR inside the building to start indoor navigation.');
+  S.legs = b.route(anchor.id, place.id);
+  if (!S.legs?.length) throw userError(`No walking route from ${anchor.name} to ${place.name}.`);
+  sessionStorage.setItem('saathi_indoor_' + b.id, place.id); // continue after changing floors
+  S.legIndex = 0;
+  useLeg(0);
+
+  if (!S.useXR) {
+    // Overlay mode: compass for direction (corrected to the plan by the Saathi point), steps for distance.
+    S.sensors = SIM ? new SimSensors({ lat: 0, lng: 0 }) : new Sensors();
+    S.sensors.startOrientation();
+    S.headingOffset = SIM ? 0 : null; // the simulator already reports plan headings
+    S.stepAlong = 0;
+    S.ped = new Pedometer(() => { S.stepAlong = Math.min(S.path.length, S.stepAlong + CONFIG.stepLength); });
+    S.ped.start();
+  }
+  const start = S.path.pts[0];
+  await openNav({ lat: start.y, lng: start.x });
+}
+
+function useLeg(i) {
+  const leg = S.legs[i];
+  S.leg = leg;
+  S.path = Path.fromLocal(leg.points);
+  S.maneuvers = leg.steps.map(s => ({ ...s }));
+  S.routePoints = leg.points.map(p => ({ lat: p.y, lng: p.x }));
+  S.along = 0; S.seg = 0; S.announced = -1;
+  const isLast = i === S.legs.length - 1;
+  const end = leg.points[leg.points.length - 1];
+  S.ar.pinScale = 0.45; // indoor ceilings: a short pin
+  S.ar.setRoute(S.path, S.maneuvers, end, isLast ? place.name : (leg.endsWith === 'stairs' ? 'Stairs' : 'Lift'));
+}
+
+async function openNav(startLL) {
+  show('nav');
+  $('dest-name').textContent = place.name;
+  const destLL = S.mode === 'indoor'
+    ? (() => { const p = S.leg.points[S.leg.points.length - 1]; return { lat: p.y, lng: p.x, name: place.name }; })()
+    : place;
+  if (!S.map) {
+    S.map = new NavMap($('nav-map'));
+    S.map.onFollowChange = f => $('map-recenter').hidden = f;
+    if (S.mode === 'indoor') await S.map.initIndoor(S.building, S.building.floor(S.leg.floor), startLL, destLL);
+    else await S.map.init(startLL, destLL);
+  } else if (S.mode === 'indoor') await S.map.initIndoor(S.building, S.building.floor(S.leg.floor), startLL, destLL);
+  S.map.setDest(destLL);
+  S.map.setRoute(S.routePoints);
+  S.map.follow = true;
+  if (S.useXR) status('Point your camera at the ground', 'Move the phone slowly until the green ring appears on the floor.', true);
 }
 
 function withTimeout(p, ms) {
@@ -355,68 +599,165 @@ async function buildRoute(origin) {
   S.along = 0;
   S.seg = 0;
   S.announced = -1;
+  S.ar.pinScale = 1;
   S.ar.setRoute(S.path, S.maneuvers, toLocal(origin, place), place.name);
   if (S.map) S.map.setRoute(pts);
+  if (S.aligner?.ready) S.aligner.ready = false; // re-register against the new route origin
   if (r.source === 'straight') toast("Couldn't load street directions - showing the direct way", 4000);
 }
 
-// ───────────── Frame loop ─────────────
+/** In-AR status card (WebXR mode has no separate loading screen: the camera is already running). */
+function status(title, detail = '', ground = false) {
+  const el = $('xr-status');
+  if (!title) { el.hidden = true; return; }
+  el.hidden = false;
+  el.classList.toggle('ground', ground);
+  el.querySelector('b').textContent = title;
+  el.querySelector('small').textContent = detail;
+}
+
+// ───────────── Frame loops ─────────────
 
 const tmpQ = new THREE.Quaternion();
 const tmpE = new THREE.Euler();
+const tmpV = new THREE.Vector3();
 
+/** WebXR frame: tracking pose from ARCore, ground from hit tests, registration from GPS/compass or the Saathi point. */
+function xrLoop(now, frame) {
+  if (!S.running) return;
+  const dt = Math.min(0.1, (now - S.last) / 1000);
+  S.last = now;
+  const cam = S.ar.camera;
+  const xr = S.xr;
+  xr.updateGround(frame, cam.position.y);
+  const ground = xr.ground ?? (S.ar.renderer.xr.getReferenceSpace() && cam.position.y > 0.8 ? 0 : cam.position.y - CONFIG.eyeHeight);
+
+  // Register the route once we know where we are and which way we face.
+  const al = S.aligner;
+  if (!al.ready && frame) {
+    if (S.mode === 'indoor') al.init(cam, S.path.pts[0], S.anchor.heading);
+    else if (S.sensors.position && S.sensors.hasOrientation) al.init(cam, toLocal(S.path.origin, S.sensors.position), S.sensors.heading);
+    else if (S.sensors.position && (S.xrWaitStart ??= now) && now - S.xrWaitStart > 3000) {
+      // No compass: start facing along the route and let the walking direction correct it.
+      al.init(cam, toLocal(S.path.origin, S.sensors.position), bearingAlong(S.path, 0));
+      toast('No compass - walk a few steps along the trail to align it', 4000);
+    }
+  }
+  if (S.mode === 'outdoor' && al.ready && S.sensors.hasOrientation) al.compass(cam, S.sensors.heading, 0.004);
+
+  if (!xr.groundLocked) {
+    status('Point your camera at the ground', 'Move the phone slowly until the green ring appears on the floor.', true);
+  } else if (!$('xr-status').hidden && $('xr-status').classList.contains('ground')) {
+    status('');
+    toast('Ground found ✓', 1500);
+  }
+
+  if (al.ready) {
+    al.apply(S.ar.world, ground);
+    S.ar.world.visible = xr.groundLocked || now - (S.xrGroundWait ??= now) > 6000;
+    const user = al.userLocal(cam);
+    const pr = S.path.project(user, S.seg);
+    S.seg = pr.seg;
+    S.along = pr.along;
+    const got = S.ar.update(dt, user, pr.along, null);
+    if (got) collect(got);
+    const heading = (Aligner.yawOf(cam) + al.theta + 360) % 360;
+    const pitch = Math.asin(Math.max(-1, Math.min(1, tmpV.set(0, 0, -1).applyQuaternion(cam.quaternion).y))) * 180 / Math.PI;
+    afterFrame(pr, user, heading, pitch, now);
+  } else S.ar.world.visible = false;
+
+  S.ar.render();
+}
+
+/** Overlay frame (no WebXR): camera video + compass + GPS (outdoor) or steps (indoor). */
 function loop(now) {
   if (!S.running) return;
   const dt = Math.min(0.1, (now - S.last) / 1000);
   S.last = now;
   const sn = S.sensors;
   const path = S.path;
+  let user, pr;
 
-  if (SIM) {
-    const ahead = path.at(S.along + 6).p;
-    sn.step(dt, path.length - S.along > 1 ? fromLocal(path.origin, ahead) : null);
+  if (S.mode === 'indoor') {
+    // Plan heading = compass + offset learnt at the Saathi point (you face the QR's direction when you start).
+    if (S.headingOffset == null && sn.hasOrientation) S.headingOffset = angleDiff(sn.heading, S.anchor.heading);
+    if (SIM) { // walk along the route and face along it
+      S.stepAlong = Math.min(path.length, S.stepAlong + sn.speed * dt);
+      sn._walkHeading = bearingAlong(path, S.stepAlong);
+      sn.step(dt, null);
+    }
+    user = path.at(S.stepAlong).p;
+    pr = { along: S.stepAlong, lateral: 0, seg: 0 };
+  } else {
+    if (SIM) {
+      const ahead = path.at(S.along + 6).p;
+      sn.step(dt, path.length - S.along > 1 ? fromLocal(path.origin, ahead) : null);
+    }
+    const local = toLocal(path.origin, sn.position);
+    pr = path.project(local, S.seg);
+    // Keep the trail under the user's feet when GPS wanders a little off the road.
+    const snap = path.at(pr.along).p;
+    const k = pr.lateral < 15 ? 0.75 : 0;
+    user = { x: local.x + (snap.x - local.x) * k, y: local.y + (snap.y - local.y) * k };
   }
-
-  const local = toLocal(path.origin, sn.position);
-  const pr = path.project(local, S.seg);
   S.seg = pr.seg;
   S.along = pr.along;
 
-  // Keep the trail under the user's feet when GPS wanders a little off the road.
-  const snap = path.at(pr.along).p;
-  const k = pr.lateral < 15 ? 0.75 : 0;
-  const user = { x: local.x + (snap.x - local.x) * k, y: local.y + (snap.y - local.y) * k };
-
   // Orientation: sensors if available, else GPS course / route direction.
   let q = sn.quaternion, heading = sn.heading, pitch = sn.pitch;
-  if (!sn.hasOrientation) {
+  if (S.mode === 'indoor' && S.headingOffset != null) {
+    heading = (sn.heading + S.headingOffset + 360) % 360;
+    q = tmpQ.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, -S.headingOffset * THREE.MathUtils.DEG2RAD).multiply(sn.quaternion);
+  } else if (!sn.hasOrientation) {
     heading = sn.gpsHeading ?? bearingAlong(path, pr.along);
     pitch = -5;
     tmpE.set(pitch * THREE.MathUtils.DEG2RAD, -heading * THREE.MathUtils.DEG2RAD, 0, 'YXZ');
     q = tmpQ.setFromEuler(tmpE);
   }
 
-  const got = S.ar.update(dt, user, pr.along, q);
+  const got = S.ar.update(dt, user, pr.along, q, -S.eyeHeight);
   if (got) collect(got);
   S.ar.render();
+  afterFrame(pr, user, heading, pitch, now);
+  if (S.running) requestAnimationFrame(loop);
+}
 
-  updateHud(pr, heading, pitch);
-  S.map?.update(fromLocal(path.origin, user), heading);
+/** Shared per-frame logic: HUD, map, arrival, re-routing, floor changes. */
+function afterFrame(pr, user, heading, pitch, now) {
+  updateHud(pr, user, heading, pitch);
+  const mapPos = S.mode === 'indoor' ? { lat: user.y, lng: user.x } : fromLocal(S.path.origin, user);
+  S.map?.update(mapPos, heading);
   updateTiltMap(pitch);
 
-  const remaining = Math.max(0, path.length - pr.along);
-  if (!S.arrived && (remaining < CONFIG.arrivalRadius || haversine(sn.position, place) < CONFIG.arrivalRadius)) {
+  const remaining = Math.max(0, S.path.length - pr.along);
+  if (S.mode === 'indoor') {
+    if (remaining < CONFIG.indoorArrivalRadius && !S.arrived) {
+      if (S.legIndex < S.legs.length - 1) changeFloor();
+      else arrive();
+    }
+    return;
+  }
+  if (!S.arrived && (remaining < CONFIG.arrivalRadius || haversine(S.sensors.position, place) < CONFIG.arrivalRadius)) {
     arrive();
     return;
   }
-
   // Re-route after being clearly off the path for a while (only with a decent GPS fix).
-  if (pr.lateral > CONFIG.offRouteDistance && sn.accuracy < 25) {
+  if (pr.lateral > CONFIG.offRouteDistance && S.sensors.accuracy < 25) {
     S.offRouteSince ||= now;
     if (now - S.offRouteSince > 8000 && !S.rerouting) reroute();
   } else S.offRouteSince = 0;
+}
 
-  requestAnimationFrame(loop);
+function changeFloor() {
+  const leg = S.leg, next = S.building.floor(leg.nextFloor);
+  const how = leg.endsWith === 'stairs' ? 'stairs' : 'lift';
+  S.arrived = true; // pause arrival checks
+  say(`Take the ${how} to ${next?.name || 'the next floor'}. Then scan the Saathi point there.`);
+  fail(`Take the ${how} to ${next?.name || 'the next floor'}.\n\nThen scan the Saathi point QR you see there and navigation to ${place.name} continues.`, 'Next floor');
+  $('retry-btn').textContent = 'Scan the Saathi point';
+  $('retry-btn').onclick = () => scanSaathiPoint();
+  $('error-gmaps').hidden = true;
+  stopNav();
 }
 
 function bearingAlong(path, along) {
@@ -424,9 +765,9 @@ function bearingAlong(path, along) {
   return (Math.atan2(b.x - a.x, b.y - a.y) * 180 / Math.PI + 360) % 360;
 }
 
-function updateHud(pr, heading, pitch) {
+function updateHud(pr, user, heading, pitch) {
   const along = pr.along;
-  const next = S.maneuvers.findIndex(m => m.along > along + 3 && m.maneuver !== 'DEPART');
+  const next = S.maneuvers.findIndex(m => m.along > along + (S.mode === 'indoor' ? 1 : 3) && m.maneuver !== 'DEPART');
   const remaining = Math.max(0, S.path.length - along);
   let title, dist, street = '', icon = 'STRAIGHT';
   if (next >= 0 && S.maneuvers[next].maneuver !== 'ARRIVE') {
@@ -435,9 +776,10 @@ function updateHud(pr, heading, pitch) {
     dist = m.along - along;
     street = m.street || '';
     icon = m.maneuver;
-    if (dist < 35 && S.announced !== next) {
+    const announceAt = S.mode === 'indoor' ? 8 : 35;
+    if (dist < announceAt && S.announced !== next) {
       S.announced = next;
-      say(`In ${Math.max(5, Math.round(dist / 5) * 5)} metres, ${m.instruction || title}`);
+      say(`In ${Math.max(S.mode === 'indoor' ? 2 : 5, Math.round(dist / 5) * 5)} metres, ${m.instruction || title} ${street}`);
     }
   } else {
     title = 'Go straight';
@@ -449,16 +791,27 @@ function updateHud(pr, heading, pitch) {
   if (S.icon !== icon) { S.icon = icon; $('turn-icon').innerHTML = `<path d="${maneuverIconPath(icon)}"/>`; }
   $('remaining').textContent = `${formatDistance(remaining)} · ${formatDuration(remaining / 1.3)}`;
 
-  const acc = S.sensors.accuracy;
   const a = $('accuracy');
-  a.className = 'pill ' + (acc <= 8 ? 'good' : acc > 25 ? 'bad' : '');
-  a.querySelector('b').textContent = SIM ? 'Simulated' : `GPS ±${Math.round(acc)} m`;
+  if (S.useXR) {
+    const ok = S.xr?.groundLocked;
+    a.className = 'pill ' + (ok ? 'good' : '');
+    a.querySelector('b').textContent = ok ? 'AR · ground locked' : 'AR · finding ground';
+  } else if (S.mode === 'indoor') {
+    a.className = 'pill';
+    a.querySelector('b').textContent = `Indoor · ${S.ped?.steps || 0} steps`;
+  } else {
+    const acc = S.sensors.accuracy;
+    a.className = 'pill ' + (acc <= 8 ? 'good' : acc > 25 ? 'bad' : '');
+    a.querySelector('b').textContent = SIM ? 'Simulated' : `GPS ±${Math.round(acc)} m`;
+  }
 
   // Big turn arrow when the trail is out of view (wrong way / side street).
   const hint = $('turn-hint');
-  if (S.sensors.hasOrientation && pitch > -45) {
-    const target = fromLocal(S.path.origin, S.path.at(along + 10).p);
-    const delta = angleDiff(heading, bearing(S.sensors.position, target));
+  const oriented = S.useXR ? S.aligner?.ready : S.sensors?.hasOrientation;
+  if (oriented && pitch > -45) {
+    const t = S.path.at(along + (S.mode === 'indoor' ? 4 : 10)).p;
+    const b = (Math.atan2(t.x - user.x, t.y - user.y) * 180 / Math.PI + 360) % 360;
+    const delta = angleDiff(heading, b);
     if (Math.abs(delta) > 55) {
       hint.hidden = false;
       hint.querySelector('svg').style.transform = `rotate(${delta}deg)`;
@@ -469,12 +822,15 @@ function updateHud(pr, heading, pitch) {
 
 function updateTiltMap(pitch) {
   // Like Google Live View: phone down → map, phone up → AR.
+  // In WebXR you look down to find the ground, so wait for the ground lock and need a steeper tilt.
+  if (S.useXR && !S.xr?.groundLocked) return;
+  const open = S.useXR ? -68 : -50, close = S.useXR ? -40 : -30;
   if (S.mapManual) {
-    if ((S.mapExpanded && pitch < -50) || (!S.mapExpanded && pitch > -30)) S.mapManual = false;
+    if ((S.mapExpanded && pitch < open) || (!S.mapExpanded && pitch > close)) S.mapManual = false;
     return;
   }
-  if (!S.mapExpanded && pitch < -50) setMapExpanded(true);
-  else if (S.mapExpanded && pitch > -30) setMapExpanded(false);
+  if (!S.mapExpanded && pitch < open) setMapExpanded(true);
+  else if (S.mapExpanded && pitch > close) setMapExpanded(false);
 }
 
 function setMapExpanded(on) {
@@ -544,6 +900,12 @@ function arrive() {
 
 function stopNav() {
   S.running = false;
+  S.ar?.renderer.setAnimationLoop(null);
+  if (S.xr?.session) { S.xr.onEnd = null; S.xr.end(); }
+  S.xr = null;
+  $('nav').classList.remove('xr');
+  S.ped?.stop();
+  S.ped = null;
   S.sensors?.stop();
   S.stream?.getTracks().forEach(t => t.stop());
   S.stream = null;
@@ -577,9 +939,13 @@ $('share-dl').onclick = () => {
   a.href = $('share-qr').toDataURL('image/png');
   a.click();
 };
-addEventListener('popstate', () => { stopNav(); place = placeFromUrl(); initLanding(); });
-$('retry-btn').onclick = () => location.reload();
-$('done-btn').onclick = () => { stopNav(); show('landing'); };
+addEventListener('popstate', () => { stopNav(); if (INDOOR) location.reload(); else { place = placeFromUrl(); initLanding(); } });
+$('rescan-btn').onclick = () => scanSaathiPoint();
+$('rescan-landing').onclick = () => scanSaathiPoint();
+$('height-up').onclick = () => setEyeHeight(S.eyeHeight + 0.1);
+$('height-down').onclick = () => setEyeHeight(S.eyeHeight - 0.1);
+
+$('done-btn').onclick = () => { stopNav(); if (INDOOR) sessionStorage.removeItem('saathi_indoor_' + S.building?.id); show('landing'); };
 $('exit-btn').onclick = () => { stopNav(); show('landing'); };
 $('voice-btn').onclick = () => {
   S.voice = !S.voice;
@@ -595,6 +961,13 @@ document.addEventListener('visibilitychange', async () => {
     try { S.wakeLock = await navigator.wakeLock?.request('screen'); } catch { /* optional */ }
   }
 });
+
+/** Overlay mode can't see the ground, so let people nudge the trail onto it (remembered per phone). */
+function setEyeHeight(h) {
+  S.eyeHeight = Math.max(0.6, Math.min(2.2, Math.round(h * 10) / 10));
+  try { localStorage.setItem('saathi_eye', S.eyeHeight); } catch { /* blocked */ }
+  toast(`Trail height: phone ${S.eyeHeight.toFixed(1)} m above the ground`, 1200);
+}
 
 function escapeHtml(s) { return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]); }
 

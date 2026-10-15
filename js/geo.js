@@ -53,13 +53,16 @@ export function decodePolyline(str) {
  * A polyline in local metres with cumulative distances, projection and sampling.
  */
 export class Path {
-  constructor(origin, latlngs) {
+  constructor(origin, latlngs, localPts = null) {
     this.origin = origin;
-    this.pts = latlngs.map(p => toLocal(origin, p));
+    this.pts = localPts || latlngs.map(p => toLocal(origin, p));
     this.cum = [0];
     for (let i = 1; i < this.pts.length; i++) this.cum.push(this.cum[i - 1] + dist(this.pts[i - 1], this.pts[i]));
     this.length = this.cum[this.cum.length - 1] || 0;
   }
+
+  /** A path already in local metres (indoor floor plans). */
+  static fromLocal(points) { return new Path(null, null, points.map(p => ({ x: p.x, y: p.y }))); }
 
   /** Point and unit direction at distance d along the path. */
   at(d) {
