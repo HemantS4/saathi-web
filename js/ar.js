@@ -112,6 +112,7 @@ export class ARScene {
       this.camera.quaternion.copy(quaternion);
       this.world.rotation.set(0, 0, 0);
       this.world.position.set(-userLocal.x, groundY, userLocal.y);
+      this.world.matrixAutoUpdate = true;
     }
     if (!this.path) return 0;
 

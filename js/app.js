@@ -6,7 +6,7 @@ import { placeFromUrl, googleMapsNavUrl, isValid, parseGoogleMaps, isShortMapsLi
 import { suggest, resolve, reverseGeocode, recents, addRecent, quietPosition } from './search.js';
 import { Path, toLocal, fromLocal, haversine, bearing, angleDiff, formatDistance, formatDuration } from './geo.js';
 import { computeRoute, shortManeuver, maneuverIconPath } from './routing.js';
-import { Sensors, SimSensors, Pedometer, startCamera, requestPermissions, isMobile } from './sensors.js';
+import { Sensors, SimSensors, Pedometer, startCamera, requestPermissions, isMobile, isIOS } from './sensors.js';
 import { XRSession, xrSupported } from './xr.js';
 import { Aligner } from './align.js';
 import { loadBuilding } from './indoor.js';
@@ -554,13 +554,28 @@ function drawQr(canvas, text) {
 //   indoor  overlay   : starts at the Saathi point, counts steps along the route
 
 async function start() {
-  // Anything that needs the tap's "user activation" must happen before slow awaits:
-  // iOS motion permission and the WebXR session request.
-  const perms = await requestPermissions();
+  // Chrome only allows starting WebXR straight after a tap, so the AR session is requested FIRST - support was
+  // checked when the page loaded. (iOS has no WebXR; its motion permission is requested right after.)
   S.mode = place?.indoor ? 'indoor' : 'outdoor';
-  S.useXR = !SIM && CONFIG.useWebXR !== false && await xrSupported();
-
   if (!S.ar) S.ar = new ARScene($('ar'));
+  S.xrError = null; S.xrWaitStart = null; S.xrGroundWait = null; S.camAdj = null; S.path = null;
+  S.useXR = false;
+  if (!SIM && CONFIG.useWebXR !== false && S.xrOk) {
+    show('nav');
+    $('nav').classList.add('xr');
+    status('Starting AR…', 'Allow the camera if Chrome asks.');
+    try {
+      S.xr = await new XRSession(S.ar.renderer, S.ar.scene, $('nav')).start();
+      S.useXR = true;
+      S.last = 0;
+      S.ar.renderer.setAnimationLoop((t, frame) => xrLoop(t, frame)); // camera + ground search run right away
+    } catch (e) {
+      console.warn('[Saathi] WebXR failed, using camera overlay', e);
+      $('nav').classList.remove('xr');
+      S.xrError = `${e.name || 'Error'}: ${e.message || e}`;
+    }
+  }
+  const perms = await requestPermissions();
   S.tripPoints = 0;
   S.arrived = false;
   S.yawFix = 0;
@@ -573,20 +588,8 @@ async function start() {
   }
 
   if (S.useXR) {
-    show('nav');
-    $('nav').classList.add('xr');
-    status('Starting AR…');
-    try {
-      S.xr = await new XRSession(S.ar.renderer, S.ar.scene, $('nav')).start();
-    } catch (e) {
-      console.warn('[Saathi] WebXR failed, using camera overlay', e);
-      S.useXR = false;
-      $('nav').classList.remove('xr');
-    }
-  }
-  if (S.useXR) {
     S.xr.onSelect = rc => { if (S.ar.tapRay(rc)) collect(1); };
-    S.xr.onEnd = () => { if (S.running && !S.arrived) { stopNav(); show('landing'); } };
+    S.xr.onEnd = () => { if (!S.arrived) { stopNav(); show('landing'); } };
     S.aligner = new Aligner();
   } else if (!SIM) {
     loading('Allow camera access', `${CONFIG.brand} shows the way through your camera.`);
@@ -611,12 +614,13 @@ async function start() {
   if (S.noCamera) toast('Camera unavailable - showing directions only', 4000);
   else if (!SIM && !perms.motion) toast('Motion sensors blocked - arrows may be less accurate', 4000);
   else if (SIM) toast('Simulator: drag to look around · W/S speed · M map', 5000);
+  if (S.xrError) toast('Ground detection unavailable (' + S.xrError + ') - using basic AR', 6000);
+  else if (!S.useXR && !SIM && !S.xrOk) toast('Basic AR on this phone: the trail cannot lock to the ground. See "AR mode" on the start screen.', 6000);
 
   updatePoints(0);
   S.running = true;
   S.last = performance.now();
-  if (S.useXR) S.ar.renderer.setAnimationLoop((t, frame) => xrLoop(t, frame));
-  else requestAnimationFrame(loop);
+  if (!S.useXR) requestAnimationFrame(loop);
 }
 
 function userError(msg) { const e = new Error(msg); e.userMessage = msg; return e; }
@@ -640,7 +644,7 @@ async function startOutdoor() {
   if (S.useXR) {
     // Every GPS fix nudges the registration; between fixes ARCore tracking keeps the trail still.
     S.sensors.onPosition = (pos, acc) => {
-      if (S.aligner?.ready) S.aligner.gps(S.ar.camera, toLocal(S.path.origin, pos), acc);
+      if (S.aligner?.ready) S.aligner.gps(S.camAdj || S.ar.camera, toLocal(S.path.origin, pos), acc);
     };
   }
   await openNav(S.sensors.position);
@@ -757,53 +761,78 @@ function status(title, detail = '', ground = false) {
 const tmpQ = new THREE.Quaternion();
 const tmpE = new THREE.Euler();
 const tmpV = new THREE.Vector3();
+const tmpM = new THREE.Matrix4();
+const tmpM2 = new THREE.Matrix4();
 
 /** WebXR frame: tracking pose from ARCore, ground from hit tests, registration from GPS/compass or the Saathi point. */
 function xrLoop(now, frame) {
-  if (!S.running) return;
-  const dt = Math.min(0.1, (now - S.last) / 1000);
+  if (!S.xr) return;
+  const dt = Math.min(0.1, (now - (S.last || now)) / 1000);
   S.last = now;
   const cam = S.ar.camera;
   const xr = S.xr;
-  xr.updateGround(frame, cam.position.y);
-  const ground = xr.ground ?? (S.ar.renderer.xr.getReferenceSpace() && cam.position.y > 0.8 ? 0 : cam.position.y - CONFIG.eyeHeight);
 
-  // Register the route once we know where we are and which way we face.
-  const al = S.aligner;
-  if (!al.ready && frame) {
-    if (S.mode === 'indoor') al.init(cam, S.path.pts[0], S.anchor.heading);
-    else if (S.sensors.position && S.sensors.hasOrientation) al.init(cam, toLocal(S.path.origin, S.sensors.position), S.sensors.heading);
-    else if (S.sensors.position && (S.xrWaitStart ??= now) && now - S.xrWaitStart > 3000) {
-      // No compass: start facing along the route and let the walking direction correct it.
-      al.init(cam, toLocal(S.path.origin, S.sensors.position), bearingAlong(S.path, 0));
-      toast('No compass - walk a few steps along the trail to align it', 4000);
-    }
-  }
-  if (S.mode === 'outdoor' && al.ready && S.sensors.hasOrientation) al.compass(cam, S.sensors.heading, 0.004);
+  // The camera, expressed in the frame the content was placed in: if ARCore has nudged the ground anchor since,
+  // undo that nudge so all registration maths stays consistent, then apply it to the content as a whole.
+  const delta = xr.anchorDelta(frame, tmpM);
+  const camAdj = S.camAdj ||= { position: new THREE.Vector3(), quaternion: new THREE.Quaternion() };
+  tmpM2.copy(delta).invert();
+  camAdj.position.copy(cam.position).applyMatrix4(tmpM2);
+  camAdj.quaternion.setFromRotationMatrix(tmpM2).multiply(cam.quaternion);
+
+  xr.updateGround(frame, cam.position.y);
+  const ground = xr.ground ?? (cam.position.y > 0.8 ? 0 : cam.position.y - CONFIG.eyeHeight);
 
   if (!xr.groundLocked) {
     status('Point your camera at the ground', 'Move the phone slowly until the green ring appears on the floor.', true);
   } else if (!$('xr-status').hidden && $('xr-status').classList.contains('ground')) {
-    status('');
-    toast('Ground found ✓', 1500);
+    status(S.path ? '' : 'Ground found ✓ Getting your route…');
+    if (S.path) toast('Ground found ✓', 1500);
   }
 
+  // Still waiting for GPS / the route: keep the camera and ground search running.
+  if (!S.running || !S.path) { S.ar.world.visible = false; S.ar.render(); return; }
+
+  // Register the route once we know where we are and which way we face.
+  const al = S.aligner;
+  if (!al.ready && frame) {
+    if (S.mode === 'indoor') al.init(camAdj, S.path.pts[0], S.anchor.heading);
+    else if (S.sensors.position && S.sensors.hasOrientation) al.init(camAdj, toLocal(S.path.origin, S.sensors.position), S.sensors.heading);
+    else if (S.sensors.position && (S.xrWaitStart ??= now) && now - S.xrWaitStart > 3000) {
+      // No compass: start facing along the route and let the walking direction correct it.
+      al.init(camAdj, toLocal(S.path.origin, S.sensors.position), bearingAlong(S.path, 0));
+      toast('Walk a few steps along the trail and it will line up with the road', 4000);
+    }
+  }
+  if (S.mode === 'outdoor' && al.ready && S.sensors.hasOrientation) al.compass(camAdj, S.sensors.heading);
+
   if (al.ready) {
-    al.apply(S.ar.world, ground);
-    S.ar.world.visible = xr.groundLocked || now - (S.xrGroundWait ??= now) > 6000;
-    const user = al.userLocal(cam);
+    // Glue everything to a real anchor on the ground once we've found it.
+    if (xr.groundLocked && !xr.anchor) xr.anchorAt(frame, { x: cam.position.x, y: ground, z: cam.position.z });
+
+    const user = al.userLocal(camAdj);
     const pr = S.path.project(user, S.seg);
     S.seg = pr.seg;
     S.along = pr.along;
     if (pr.lateral < 15) {
-      // You're walking the route, so the road direction you just covered tells us the true heading,
+      // You're walking the route, so the road direction you just covered gives the true heading,
       // and your position belongs on the route line (GPS drifts sideways by several metres).
-      al.walkAlong(cam, bearingAlong(S.path, Math.max(0, pr.along - 3)));
-      al.pinTo(cam, S.path.at(pr.along).p, 0.015);
+      al.walkAlong(camAdj, bearingAlong(S.path, Math.max(0, pr.along - 3)));
+      al.pinTo(camAdj, S.path.at(pr.along).p);
     }
+    al.step(dt);
+
+    const world = S.ar.world;
+    al.apply(world, ground);
+    world.updateMatrix();
+    world.matrix.premultiply(delta);
+    world.matrixAutoUpdate = false;
+    world.matrixWorldNeedsUpdate = true;
+    world.visible = xr.groundLocked || now - (S.xrGroundWait ??= now) > 8000;
+
     const got = S.ar.update(dt, user, pr.along, null);
     if (got) collect(got);
-    const heading = (Aligner.yawOf(cam) + al.theta + 360) % 360;
+    const heading = (Aligner.yawOf(camAdj) + al.shownTheta + 360) % 360;
     const pitch = Math.asin(Math.max(-1, Math.min(1, tmpV.set(0, 0, -1).applyQuaternion(cam.quaternion).y))) * 180 / Math.PI;
     afterFrame(pr, user, heading, pitch, now);
   } else S.ar.world.visible = false;
@@ -1055,6 +1084,7 @@ function stopNav() {
   S.ar?.renderer.setAnimationLoop(null);
   if (S.xr?.session) { S.xr.onEnd = null; S.xr.end(); }
   S.xr = null;
+  S.aligner = null;
   $('nav').classList.remove('xr');
   S.ped?.stop();
   S.ped = null;
@@ -1090,7 +1120,7 @@ $('align-done').onclick = () => { $('align-layer').hidden = true; S.aligning = f
     if (lastX == null) return;
     const deg = (e.clientX - lastX) * 0.15; // drag right → trail swings right
     lastX = e.clientX;
-    if (S.useXR) S.aligner?.rotate(-deg);
+    if (S.useXR) S.aligner?.rotate(S.camAdj || S.ar.camera, -deg);
     else { S.yawFix -= deg; S.yawLocked = true; }
   });
   layer.addEventListener('pointerup', () => lastX = null);
@@ -1145,6 +1175,26 @@ function setEyeHeight(h) {
 }
 
 function escapeHtml(s) { return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]); }
+
+// Check WebXR support up front so the Start tap can request the AR session immediately.
+S.xrCheck = xrSupported().then(ok => { S.xrOk = ok; updateArModeNote(); });
+
+function updateArModeNote() {
+  const el = $('ar-mode');
+  if (!el || S.xrOk == null) return;
+  el.hidden = false;
+  if (S.xrOk) {
+    el.className = 'ar-mode ok';
+    el.innerHTML = '<b>Full AR</b> on this phone: the camera finds the ground and locks the trail to it.';
+  } else if (isIOS) {
+    el.className = 'ar-mode';
+    el.innerHTML = '<b>Basic AR</b>: iPhone browsers cannot detect the ground. Use the ▲▼ buttons to place the trail on it.';
+  } else {
+    el.className = 'ar-mode warn';
+    el.innerHTML = '<b>Basic AR</b>: ground detection is off. Use <b>Chrome</b> and install or update ' +
+      '<a href="https://play.google.com/store/apps/details?id=com.google.ar.core" target="_blank" rel="noopener">Google Play Services for AR</a>, then reload.';
+  }
+}
 
 if (SIM) window.__saathi = { S, dropPin, dropIndoorPin, choosePlace, chooseIndoor, pickOnMap, setMapTab }; // simulator debugging hooks
 initLanding();

@@ -262,3 +262,8 @@ body.indoor .rescan { display: grid; }
 .align-card div { flex: 1; }
 .align-card b { display: block; }
 .align-card small { display: block; color: rgba(255,255,255,.75); font-size: 13px; margin-top: 2px; }
+
+.ar-mode { font-size: 13px; line-height: 1.45; text-align: center; margin: 0; padding: 9px 14px; border-radius: 12px; background: #fff; color: var(--ink); max-width: 420px; }
+.ar-mode.ok { background: #eaf7ef; color: #17643a; }
+.ar-mode.warn { background: #fff4d6; color: #6e4d00; }
+.ar-mode a { color: inherit; font-weight: 700; }

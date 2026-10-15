@@ -112,6 +112,32 @@ export class XRSession {
     }
   }
 
+  /**
+   * Pins the content to a real-world anchor on the ground. ARCore keeps refining its map while you walk; an anchor moves
+   * with those corrections, so content attached to it stays glued to the street instead of sliding away.
+   */
+  async anchorAt(frame, position) {
+    if (this.anchor || this._anchoring || !frame?.createAnchor) return;
+    this._anchoring = true;
+    try {
+      const pose = new XRRigidTransform({ x: position.x, y: position.y, z: position.z, w: 1 });
+      this.anchor = await frame.createAnchor(pose, this.refSpace);
+      this.anchorM0 = null;
+    } catch (e) { console.warn('[Saathi] anchor unavailable', e); }
+    this._anchoring = false;
+  }
+
+  /** How far the anchor has been moved by tracking corrections since it was created (identity if no anchor). */
+  anchorDelta(frame, out) {
+    out.identity();
+    if (!this.anchor || !frame?.trackedAnchors?.has(this.anchor)) return out;
+    const pose = frame.getPose(this.anchor.anchorSpace, this.refSpace);
+    if (!pose) return out;
+    this._m.fromArray(pose.transform.matrix);
+    if (!this.anchorM0) { this.anchorM0 = this._m.clone(); this.anchorM0inv = this.anchorM0.clone().invert(); }
+    return out.multiplyMatrices(this._m, this.anchorM0inv);
+  }
+
   end() { this.session?.end(); }
 }
 
