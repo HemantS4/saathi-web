@@ -20,6 +20,8 @@ QR code  ──►  https://your-site/?d=28.632650,77.218350&n=Rahman+Stores&p=<
 
 ## Navigate anywhere
 - Open `https://<your-site>/` with no parameters to get the **Where to?** screen. Results are biased to where you are once location is allowed.
+- **Any spot is reachable**: tap anywhere on the street map, on the landing card map, or on the expanded map while navigating ("Go to this spot instead?").
+- After scanning a Saathi point, the same screen shows that building's shops **and** outdoor search, with **Floor plan / Street map** tabs. Tap any spot on a floor plan to go there (it snaps to the nearest walkway). **Leave building** returns to outdoor-only.
 - Every destination gets its own link (the address bar updates), so it can be bookmarked, shared, or turned into a QR from the share button.
 - The walk always starts from your current GPS position. Destinations more than 5 km away show a note offering Google Maps for other ways to get there.
 - Search: Google Places Autocomplete with a key (enable **Geocoding API** too for dropped-pin addresses), otherwise Photon (komoot) on OpenStreetMap data.

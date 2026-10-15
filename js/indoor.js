@@ -41,6 +41,47 @@ export class Building {
     }
   }
 
+  /**
+   * Destination at any spot on a floor plan: snaps to the nearest walkway, splitting that walkway with a temporary
+   * node so the route ends exactly there. Returns the temporary place (id '_pin').
+   */
+  pinPlace(floorId, x, y, name = 'Selected spot') {
+    this._removePin();
+    let best = null;
+    for (const [a, list] of this.adj) {
+      const na = this.nodes.get(a);
+      if (na.floor !== floorId) continue;
+      for (const { to } of list) {
+        const nb = this.nodes.get(to);
+        if (nb.floor !== floorId || a > to) continue; // each edge once
+        const dx = nb.x - na.x, dy = nb.y - na.y, l2 = dx * dx + dy * dy || 1e-9;
+        const t = Math.max(0, Math.min(1, ((x - na.x) * dx + (y - na.y) * dy) / l2));
+        const px = na.x + dx * t, py = na.y + dy * t, d = Math.hypot(x - px, y - py);
+        if (!best || d < best.d) best = { d, px, py, a, b: to };
+      }
+    }
+    if (!best) return null;
+    const pin = { id: '_pin', floor: floorId, x: +best.px.toFixed(2), y: +best.py.toFixed(2) };
+    this.nodes.set(pin.id, pin);
+    const link = (u, v) => {
+      const w = Math.hypot(this.nodes.get(u).x - this.nodes.get(v).x, this.nodes.get(u).y - this.nodes.get(v).y);
+      this.adj.get(u).push({ to: v, w });
+    };
+    this.adj.set(pin.id, []);
+    for (const end of [best.a, best.b]) { link(pin.id, end); link(end, pin.id); }
+    const place = { id: '_pin', name, node: pin.id, category: 'Dropped pin' };
+    this.places.push(place);
+    return place;
+  }
+
+  _removePin() {
+    if (!this.nodes.has('_pin')) return;
+    this.nodes.delete('_pin');
+    this.adj.delete('_pin');
+    for (const list of this.adj.values()) for (let i = list.length - 1; i >= 0; i--) if (list[i].to === '_pin') list.splice(i, 1);
+    this.places = this.places.filter(p => p.id !== '_pin');
+  }
+
   floor(id) { return this.floors.find(f => f.id === id) || this.floors[0]; }
   imageUrl(floor) { return new URL(floor.image, this.baseUrl).href; }
   anchor(id) { return this.anchors.find(a => a.id === id); }

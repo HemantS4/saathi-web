@@ -26,14 +26,25 @@
       <button id="search-clear" class="clear" aria-label="Clear" hidden>✕</button>
     </div>
     <p id="search-status" class="search-status"></p>
+    <div id="indoor-wrap" hidden>
+      <div class="indoor-head"><h3 id="indoor-title" class="list-title">Inside</h3><button id="leave-building" class="link-btn">Leave building</button></div>
+      <ul id="indoor-results" class="results"></ul>
+    </div>
     <ul id="search-results" class="results"></ul>
     <div id="recent-wrap" hidden>
       <h3 class="list-title">Recent</h3>
       <ul id="recent-list" class="results"></ul>
     </div>
-    <h3 class="list-title">Or tap the map to drop a pin</h3>
+    <div class="map-head">
+      <h3 id="map-tip" class="list-title">Or tap the map to drop a pin</h3>
+      <select id="plan-floor" hidden></select>
+    </div>
+    <div id="map-tabs" class="map-tabs" hidden>
+      <button data-map="plan">Floor plan</button><button data-map="street">Street map</button>
+    </div>
     <div class="pick-map-wrap">
       <div id="search-map" class="search-map"></div>
+      <div id="plan-map" class="search-map" hidden></div>
       <div id="pin-card" class="pin-card" hidden>
         <div><b id="pin-name">Dropped pin</b><small id="pin-sub"></small></div>
         <button id="pin-go" class="btn btn-primary btn-small">Go here</button>
@@ -63,6 +74,8 @@
     </div>
 
     <div class="landing-map" id="landing-map"></div>
+    <div class="landing-map" id="landing-plan" hidden></div>
+    <p class="map-note">Tap the map to pick a different spot</p>
 
     <div class="landing-actions">
       <button id="start-btn" class="btn btn-primary">
@@ -161,6 +174,7 @@
 
     <div id="map-frame" class="map-frame compact">
       <div id="nav-map" class="map"></div>
+      <div id="nav-plan" class="map" hidden></div>
       <button id="map-toggle" class="map-btn" aria-label="Expand map">
         <svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"/></svg>
       </button>
@@ -176,6 +190,11 @@
       <div id="remaining" class="muted-light">— · —</div>
     </div>
 
+    <div id="spot-card" class="spot-card card-dark" hidden>
+      <span>Go to this spot instead?</span>
+      <button id="spot-cancel" class="link-btn light">No</button>
+      <button id="spot-go" class="btn btn-primary btn-small">Go here</button>
+    </div>
     <div id="toast" class="toast" hidden></div>
   </section>
 

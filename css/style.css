@@ -234,3 +234,18 @@ body.indoor .rescan { display: grid; }
 #search.indoor .pick-map-wrap, #search.indoor .list-title, #search.indoor #recent-wrap { display: none !important; }
 #start-btn:disabled { opacity: .5; box-shadow: none; }
 #error p { white-space: pre-line; }
+
+/* Unified "Where to?" */
+.indoor-head, .map-head { display: flex; align-items: center; gap: 10px; }
+.indoor-head .list-title, .map-head .list-title { flex: 1; }
+.indoor-head .link-btn { margin: 22px 4px 8px; }
+.map-head select { width: auto; font: inherit; font-size: 14px; padding: 6px 10px; border-radius: 10px; border: 1.5px solid #dcdad4; background: #fff; margin: 14px 0 0; }
+.map-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.map-tabs button { flex: 1; border: 1.5px solid #dcdad4; background: #fff; border-radius: 12px; padding: 9px; font-weight: 600; font-size: 14px; color: var(--ink); }
+.map-tabs button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+#indoor-results .ico { background: #eef2fb; }
+#indoor-results .ico svg { fill: #3b6fd8; }
+.map-note { margin: -10px 0 0; font-size: 12.5px; color: var(--muted); text-align: center; }
+.spot-card { position: absolute; left: 14px; right: 14px; bottom: calc(180px + var(--safe-bottom)); z-index: 700; display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 16px; }
+.spot-card span { flex: 1; font-weight: 600; }
+.link-btn.light { color: rgba(255,255,255,.8); margin: 0; }

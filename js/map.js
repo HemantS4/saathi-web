@@ -124,8 +124,8 @@ export class NavMap {
     this.plan?.remove();
     this.plan = L.imageOverlay(building.imageUrl(floor), bounds).addTo(this.map);
     this.plan.bringToBack();
-    this.map.fitBounds(bounds);
-    this.map.setView([start.lat, start.lng], 2);
+    this.map.invalidateSize(); // the container may have just been un-hidden
+    this.map.fitBounds(bounds, { padding: [8, 8] });
     return this;
   }
 

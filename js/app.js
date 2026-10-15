@@ -17,8 +17,8 @@ const $ = id => document.getElementById(id);
 const QS = new URLSearchParams(location.search);
 const SIM = QS.has('sim');
 // Indoor links come from Saathi point QR codes: ?b=<building>&a=<anchor>[&to=<place>]
-const INDOOR = QS.has('b');
-let place = INDOOR ? null : placeFromUrl();
+const INDOOR_LINK = QS.has('b');
+let place = INDOOR_LINK ? null : placeFromUrl();
 
 const S = {
   sensors: null, ar: null, map: null, stream: null, wakeLock: null,
@@ -74,7 +74,7 @@ function say(text, interrupt = true) {
 
 async function initLanding() {
   $('brand-name').textContent = CONFIG.brand;
-  if (INDOOR && !S.building) { await initIndoor(); return; }
+  if (INDOOR_LINK && !S.building && !S.leftBuilding) { await initIndoor(); return; }
   if (!place) { showSearch(); return; }
   resetLandingCard();
   document.title = `${place.name} – ${CONFIG.brand}`;
@@ -94,10 +94,16 @@ async function initLanding() {
     const floor = S.building.floor(place.floor);
     const dest = { lat: place.y, lng: place.x, name: place.name };
     const startNode = S.anchor && S.building.nodes.get(S.anchor.node);
-    S.landingMap ||= new NavMap($('landing-map'));
-    await S.landingMap.initIndoor(S.building, floor, startNode ? { lat: startNode.y, lng: startNode.x } : dest, dest);
-    if (!startNode || startNode.floor !== place.floor) S.landingMap.hideUser();
-    S.landingMap.follow = false;
+    $('landing-map').hidden = true;
+    $('landing-plan').hidden = false;
+    const firstPlan = !S.landingPlan;
+    S.landingPlan ||= new NavMap($('landing-plan'));
+    await S.landingPlan.initIndoor(S.building, floor, startNode ? { lat: startNode.y, lng: startNode.x } : dest, dest);
+    S.landingPlan.setDest(dest);
+    if (!startNode || startNode.floor !== place.floor) S.landingPlan.hideUser();
+    S.landingPlan.follow = false;
+    S.landingPlan.invalidate();
+    if (firstPlan) S.landingPlan.onTap(pos => pickOnMap(pos, place.floor)); // tap anywhere → navigate there
     return;
   }
   $('gmaps-btn').hidden = $('share-btn').hidden = false;
@@ -132,11 +138,15 @@ async function initLanding() {
   }
   if (!isValid(place)) { fail("Couldn't find this place's location."); return; }
 
+  $('landing-map').hidden = false;
+  $('landing-plan').hidden = true;
   if (!S.landingMap) {
     S.landingMap = await new NavMap($('landing-map')).init(place, place);
     S.landingMap.hideUser?.();
     S.landingMap.follow = false;
+    S.landingMap.onTap(pos => pickOnMap(pos, null)); // tap anywhere → navigate there
   }
+  S.landingMap.invalidate();
   S.landingMap.setDest(place, 17);
 
   // Distance from here (only if location was already allowed, so we don't prompt on page load).
@@ -167,9 +177,16 @@ function shareUrl() {
   return buildNavUrl(new URL('./', location.href).href, place);
 }
 
-/** Makes `p` the destination, updates the address bar (so it can be bookmarked/shared) and shows its card. */
+// ───────────── Where to? ─────────────
+// One screen for everything: outdoor search (any place), the scanned building's shops/rooms when you're inside one,
+// recents, and "tap any spot" on either the street map or the building's floor plan.
+
+let searchSeq = 0, searchTimer = 0;
+
+/** Outdoor destination: drops any building context from the link. */
 function choosePlace(p) {
   place = { name: p.name || 'Destination', lat: p.lat, lng: p.lng, placeId: p.placeId || '', offer: p.offer || '', tagline: p.tagline || '' };
+  document.body.classList.remove('indoor');
   addRecent(place);
   const u = new URL(shareUrl());
   if (SIM) u.searchParams.set('sim', '1');
@@ -177,17 +194,50 @@ function choosePlace(p) {
   initLanding();
 }
 
-// ───────────── Where to? ─────────────
-
-let searchSeq = 0, searchTimer = 0;
+/** Indoor destination (a listed place or a pinned spot) inside the scanned building. */
+function chooseIndoor(p) {
+  place = indoorPlace(p);
+  document.body.classList.add('indoor');
+  const u = new URL('./', location.href);
+  u.searchParams.set('b', QS.get('b') || S.building.id);
+  if (S.anchor) u.searchParams.set('a', S.anchor.id);
+  u.searchParams.set('to', p.id === '_pin' ? `@${place.floor},${place.x},${place.y}` : p.id);
+  if (SIM) u.searchParams.set('sim', '1');
+  history.pushState(null, '', u);
+  initLanding();
+}
 
 async function showSearch() {
-  if (INDOOR) return showIndoorSearch();
+  const b = S.building;
   document.title = `Where to? – ${CONFIG.brand}`;
   show('search');
+  $('search-title').textContent = 'Where to?';
+  $('search-input').placeholder = b ? `Search ${b.name} or anywhere else` : 'Search a place, or paste a Google Maps link';
+  $('search-status').textContent = '';
+  $('pin-card').hidden = true;
+  $('indoor-wrap').hidden = !b;
+  $('map-tabs').hidden = !b;
+  if (b) {
+    $('indoor-title').textContent = S.anchor ? `Inside ${b.name} · you're at ${S.anchor.name}` : `Inside ${b.name}`;
+    $('plan-floor').innerHTML = b.floors.map(f => `<option value="${f.id}">${escapeHtml(f.name)}</option>`).join('');
+    const here = S.anchor && b.nodes.get(S.anchor.node);
+    if (here) $('plan-floor').value = here.floor;
+  }
+  renderIndoorResults();
   renderRecents();
-  const input = $('search-input');
-  setTimeout(() => input.focus(), 50);
+  setTimeout(() => $('search-input').focus(), 50);
+  await setMapTab(b ? (S.mapTab || 'plan') : 'street');
+}
+
+async function setMapTab(tab) {
+  S.mapTab = tab;
+  for (const t of document.querySelectorAll('#map-tabs [data-map]')) t.classList.toggle('on', t.dataset.map === tab);
+  $('search-map').hidden = tab !== 'street';
+  $('plan-map').hidden = tab !== 'plan';
+  $('plan-floor').hidden = tab !== 'plan';
+  $('map-tip').textContent = tab === 'plan' ? 'Or tap any spot on the floor plan' : 'Or tap the map to drop a pin';
+  $('pin-card').hidden = true;
+  if (tab === 'plan') return showPlanMap();
 
   S.near ??= await quietPosition();
   if (!S.searchMap) {
@@ -199,6 +249,33 @@ async function showSearch() {
     S.searchMap.setView(start, S.near || recents()[0] ? 15 : 4);
     S.searchMap.onTap(dropPin);
   } else S.searchMap.invalidate();
+}
+
+async function showPlanMap() {
+  const b = S.building, floor = b.floor($('plan-floor').value);
+  const here = S.anchor && b.nodes.get(S.anchor.node);
+  const centre = { lat: floor.heightM / 2, lng: floor.widthM / 2 };
+  const start = here && here.floor === floor.id ? { lat: here.y, lng: here.x } : centre;
+  const first = !S.planMap;
+  S.planMap ||= new NavMap($('plan-map'));
+  await S.planMap.initIndoor(b, floor, start, centre);
+  S.planMap.follow = false;
+  S.planMap.setDest(null);
+  if (here && here.floor === floor.id) S.planMap.showUserAt(start); else S.planMap.hideUser();
+  S.planMap.invalidate();
+  if (first) S.planMap.onTap(pos => dropIndoorPin(pos));
+}
+
+function dropIndoorPin(pos) {
+  const b = S.building, floorId = $('plan-floor').value;
+  const p = b.pinPlace(floorId, pos.lng, pos.lat, `Spot on ${b.floor(floorId).name}`);
+  if (!p) return;
+  const n = b.nodes.get(p.node);
+  S.planMap.setDest({ lat: n.y, lng: n.x });
+  S.pin = { indoor: p };
+  $('pin-card').hidden = false;
+  $('pin-name').textContent = p.name;
+  $('pin-sub').textContent = 'Nearest walkway point';
 }
 
 async function dropPin(pos) {
@@ -215,8 +292,25 @@ async function dropPin(pos) {
   $('pin-sub').textContent = r.tagline || `${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}`;
 }
 
+/** Opens the search screen with a pin already dropped where a map was tapped. */
+async function pickOnMap(pos, indoor) {
+  stopNav();
+  await showSearch();
+  if (indoor && S.building) {
+    await setMapTab('plan');
+    $('plan-floor').value = indoor;
+    await showPlanMap();
+    dropIndoorPin(pos);
+  } else {
+    await setMapTab('street');
+    S.searchMap.setView(pos, 17);
+    dropPin(pos);
+  }
+  $('pin-card').scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
 function onSearchInput() {
-  if (INDOOR) return renderIndoorResults();
+  renderIndoorResults();
   const text = $('search-input').value;
   $('search-clear').hidden = !text;
   clearTimeout(searchTimer);
@@ -257,6 +351,7 @@ function onSearchInput() {
 
 const PIN_SVG = '<svg viewBox="0 0 24 24"><path d="M12 22s-7-7.6-7-12.5a7 7 0 0 1 14 0C19 14.4 12 22 12 22zm0-9.5a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/></svg>';
 const CLOCK_SVG = '<svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 10.6 3.4 2-1 1.7L11 13V7h2z"/></svg>';
+const SHOP_SVG = '<svg viewBox="0 0 24 24"><path d="M4 4h16l1 5a3 3 0 0 1-5 2 3 3 0 0 1-4 0 3 3 0 0 1-4 0 3 3 0 0 1-5-2zm1 8.5V20h14v-7.5a4.6 4.6 0 0 1-3 .3V18H8v-5.2a4.6 4.6 0 0 1-3-.3z"/></svg>';
 
 function renderResults(list) {
   const ul = $('search-results');
@@ -301,12 +396,29 @@ async function initIndoor() {
   }
   const b = S.building;
   S.anchor = b.anchor(QS.get('a')) || null;
-  document.body.classList.add('indoor');
-  // Destination: from the QR (?to=), or carried over from before a floor change.
-  const to = QS.get('to') || sessionStorage.getItem('saathi_indoor_' + b.id);
-  const p = to && b.place(to);
-  if (p) { place = indoorPlace(p); initLanding(); return; }
-  showIndoorSearch();
+  // Destination: from the QR (?to=), a pinned spot (?to=@floor,x,y), or carried over from before a floor change.
+  const to = QS.get('to') || pendingAfterFloorChange(b);
+  let p = null;
+  if (to?.startsWith('@')) {
+    const [f, x, y] = to.slice(1).split(',');
+    p = b.pinPlace(f, +x, +y, `Spot on ${b.floor(f).name}`);
+  } else if (to) p = b.place(to);
+  if (p) { place = indoorPlace(p); document.body.classList.add('indoor'); initLanding(); return; }
+  showSearch();
+}
+
+/**
+ * After "take the lift, then scan the Saathi point there", continue to the same destination - but only if this scan is
+ * on a different floor and within 15 minutes. Otherwise every later visit would jump straight back to an old trip.
+ */
+function pendingAfterFloorChange(b) {
+  const key = 'saathi_indoor_' + b.id;
+  let pending = null;
+  try { pending = JSON.parse(sessionStorage.getItem(key)); } catch { /* old format */ }
+  sessionStorage.removeItem(key);
+  if (!pending?.to || Date.now() - pending.at > 15 * 60 * 1000) return null;
+  const here = S.anchor && b.nodes.get(S.anchor.node);
+  return here && here.floor !== pending.fromFloor ? pending.to : null;
 }
 
 function indoorPlace(p) {
@@ -319,25 +431,14 @@ function indoorPlace(p) {
   };
 }
 
-function showIndoorSearch() {
-  const b = S.building;
-  document.title = `${b.name} – ${CONFIG.brand}`;
-  show('search');
-  $('search').classList.add('indoor');
-  $('search-title').textContent = `Where to in ${b.name}?`;
-  $('search-input').placeholder = 'Search shops, rooms, lifts…';
-  $('search-status').textContent = S.anchor
-    ? `You're at: ${S.anchor.name}`
-    : 'Tip: scan a Saathi point QR inside the building so we know where you are.';
-  renderIndoorResults();
-}
-
 function renderIndoorResults() {
+  const b = S.building, ul = $('indoor-results');
+  ul.innerHTML = '';
+  if (!b) return;
   const q = $('search-input').value.trim().toLowerCase();
-  $('search-clear').hidden = !q;
-  const b = S.building;
   const here = S.anchor && b.nodes.get(S.anchor.node);
   const list = b.places
+    .filter(p => p.id !== '_pin')
     .filter(p => !q || p.name.toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q))
     .map(p => {
       const n = b.nodes.get(p.node);
@@ -346,19 +447,32 @@ function renderIndoorResults() {
       if (route) dist = route.reduce((s, n2, i) => i && n2.floor === route[i - 1].floor ? s + Math.hypot(n2.x - route[i - 1].x, n2.y - route[i - 1].y) : s, 0);
       return { p, dist, floor: b.floor(n?.floor)?.name };
     })
-    .sort((a, c) => (a.dist ?? 1e9) - (c.dist ?? 1e9));
-  const ul = $('search-results');
-  ul.innerHTML = '';
-  for (const { p, dist, floor } of list) {
-    ul.appendChild(resultItem({ title: p.name, subtitle: [p.category, floor].filter(Boolean).join(' · '), distance: dist }, PIN_SVG, () => {
-      place = indoorPlace(p);
-      const u = new URL(location.href);
-      u.searchParams.set('to', p.id);
-      history.pushState(null, '', u);
-      initLanding();
-    }));
-  }
-  if (!list.length) $('search-status').textContent = 'Nothing matches that name.';
+    .sort((a, c) => (a.dist ?? 1e9) - (c.dist ?? 1e9))
+    .slice(0, q ? 20 : 6);
+  for (const { p, dist, floor } of list)
+    ul.appendChild(resultItem({ title: p.name, subtitle: [p.category, floor].filter(Boolean).join(' · '), distance: dist }, SHOP_SVG, () => chooseIndoor(p)));
+  $('indoor-wrap').hidden = !list.length && !!q;
+}
+
+/** Tap on the big map while navigating → offer to go there instead. */
+function offerSpot(pos, floor) {
+  S.spot = { pos, floor };
+  $('spot-card').hidden = false;
+  clearTimeout(S.spotTimer);
+  S.spotTimer = setTimeout(() => $('spot-card').hidden = true, 6000);
+}
+
+/** Forget the scanned building (back to outdoor-only search). */
+function leaveBuilding() {
+  if (S.building) sessionStorage.removeItem('saathi_indoor_' + S.building.id);
+  S.leftBuilding = true;
+  S.building = null; S.anchor = null; S.planMap = null;
+  document.body.classList.remove('indoor');
+  $('plan-map').innerHTML = '';
+  const u = new URL('./', location.href);
+  if (SIM) u.searchParams.set('sim', '1');
+  history.replaceState(null, '', u);
+  showSearch();
 }
 
 /** In-app scanner for Saathi point QRs (to re-locate indoors or after changing floors). */
@@ -443,7 +557,7 @@ async function start() {
   // Anything that needs the tap's "user activation" must happen before slow awaits:
   // iOS motion permission and the WebXR session request.
   const perms = await requestPermissions();
-  S.mode = INDOOR ? 'indoor' : 'outdoor';
+  S.mode = place?.indoor ? 'indoor' : 'outdoor';
   S.useXR = !SIM && CONFIG.useWebXR !== false && await xrSupported();
 
   if (!S.ar) S.ar = new ARScene($('ar'));
@@ -531,7 +645,6 @@ async function startIndoor() {
   if (!anchor) throw userError('Scan a Saathi point QR inside the building to start indoor navigation.');
   S.legs = b.route(anchor.id, place.id);
   if (!S.legs?.length) throw userError(`No walking route from ${anchor.name} to ${place.name}.`);
-  sessionStorage.setItem('saathi_indoor_' + b.id, place.id); // continue after changing floors
   S.legIndex = 0;
   useLeg(0);
 
@@ -567,12 +680,28 @@ async function openNav(startLL) {
   const destLL = S.mode === 'indoor'
     ? (() => { const p = S.leg.points[S.leg.points.length - 1]; return { lat: p.y, lng: p.x, name: place.name }; })()
     : place;
-  if (!S.map) {
-    S.map = new NavMap($('nav-map'));
-    S.map.onFollowChange = f => $('map-recenter').hidden = f;
-    if (S.mode === 'indoor') await S.map.initIndoor(S.building, S.building.floor(S.leg.floor), startLL, destLL);
-    else await S.map.init(startLL, destLL);
-  } else if (S.mode === 'indoor') await S.map.initIndoor(S.building, S.building.floor(S.leg.floor), startLL, destLL);
+  // Separate map instances for streets and floor plans (a Leaflet map can't switch coordinate systems).
+  const indoor = S.mode === 'indoor';
+  $('nav-map').hidden = indoor;
+  $('nav-plan').hidden = !indoor;
+  if (indoor) {
+    const first = !S.navPlan;
+    S.navPlan ||= new NavMap($('nav-plan'));
+    await S.navPlan.initIndoor(S.building, S.building.floor(S.leg.floor), startLL, destLL);
+    if (first) {
+      S.navPlan.onFollowChange = f => $('map-recenter').hidden = f;
+      S.navPlan.onTap(pos => { if (S.mapExpanded) offerSpot(pos, S.leg.floor); });
+    }
+    S.map = S.navPlan;
+  } else {
+    if (!S.navStreet) {
+      S.navStreet = await new NavMap($('nav-map')).init(startLL, destLL);
+      S.navStreet.onFollowChange = f => $('map-recenter').hidden = f;
+      S.navStreet.onTap(pos => { if (S.mapExpanded) offerSpot(pos, null); });
+    }
+    S.map = S.navStreet;
+  }
+  S.map.invalidate();
   S.map.setDest(destLL);
   S.map.setRoute(S.routePoints);
   S.map.follow = true;
@@ -752,6 +881,9 @@ function changeFloor() {
   const leg = S.leg, next = S.building.floor(leg.nextFloor);
   const how = leg.endsWith === 'stairs' ? 'stairs' : 'lift';
   S.arrived = true; // pause arrival checks
+  // Remember the trip so scanning the Saathi point on the next floor continues it.
+  const to = place.id === '_pin' ? `@${place.floor},${place.x},${place.y}` : place.id;
+  sessionStorage.setItem('saathi_indoor_' + S.building.id, JSON.stringify({ to, fromFloor: leg.floor, at: Date.now() }));
   say(`Take the ${how} to ${next?.name || 'the next floor'}. Then scan the Saathi point there.`);
   fail(`Take the ${how} to ${next?.name || 'the next floor'}.\n\nThen scan the Saathi point QR you see there and navigation to ${place.name} continues.`, 'Next floor');
   $('retry-btn').textContent = 'Scan the Saathi point';
@@ -922,7 +1054,12 @@ $('change-btn').onclick = () => { stopNav(); $('search-input').value = ''; onSea
 $('search-input').addEventListener('input', onSearchInput);
 $('search-input').addEventListener('keydown', e => { if (e.key === 'Enter') $('search-results').querySelector('li')?.click(); });
 $('search-clear').onclick = () => { $('search-input').value = ''; onSearchInput(); $('search-input').focus(); };
-$('pin-go').onclick = () => S.pin && choosePlace(S.pin);
+$('pin-go').onclick = () => { if (S.pin?.indoor) chooseIndoor(S.pin.indoor); else if (S.pin) choosePlace(S.pin); };
+for (const t of document.querySelectorAll('#map-tabs [data-map]')) t.onclick = () => setMapTab(t.dataset.map);
+$('plan-floor').onchange = () => { $('pin-card').hidden = true; showPlanMap(); };
+$('leave-building').onclick = () => leaveBuilding();
+$('spot-go').onclick = () => { $('spot-card').hidden = true; if (S.spot) pickOnMap(S.spot.pos, S.spot.floor); };
+$('spot-cancel').onclick = () => $('spot-card').hidden = true;
 $('share-btn').onclick = () => openShare();
 $('share-close').onclick = () => $('share-sheet').hidden = true;
 $('share-sheet').onclick = e => { if (e.target.id === 'share-sheet') $('share-sheet').hidden = true; };
@@ -939,13 +1076,13 @@ $('share-dl').onclick = () => {
   a.href = $('share-qr').toDataURL('image/png');
   a.click();
 };
-addEventListener('popstate', () => { stopNav(); if (INDOOR) location.reload(); else { place = placeFromUrl(); initLanding(); } });
+addEventListener('popstate', () => { stopNav(); location.reload(); });
 $('rescan-btn').onclick = () => scanSaathiPoint();
 $('rescan-landing').onclick = () => scanSaathiPoint();
 $('height-up').onclick = () => setEyeHeight(S.eyeHeight + 0.1);
 $('height-down').onclick = () => setEyeHeight(S.eyeHeight - 0.1);
 
-$('done-btn').onclick = () => { stopNav(); if (INDOOR) sessionStorage.removeItem('saathi_indoor_' + S.building?.id); show('landing'); };
+$('done-btn').onclick = () => { stopNav(); if (place?.indoor) sessionStorage.removeItem('saathi_indoor_' + S.building?.id); show('landing'); };
 $('exit-btn').onclick = () => { stopNav(); show('landing'); };
 $('voice-btn').onclick = () => {
   S.voice = !S.voice;
@@ -971,7 +1108,7 @@ function setEyeHeight(h) {
 
 function escapeHtml(s) { return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]); }
 
-if (SIM) window.__saathi = { S, dropPin, choosePlace }; // simulator debugging hooks
+if (SIM) window.__saathi = { S, dropPin, dropIndoorPin, choosePlace, chooseIndoor, pickOnMap, setMapTab }; // simulator debugging hooks
 initLanding();
 
 // Vibration only after a real tap (browsers block it otherwise).
