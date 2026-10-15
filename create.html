@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Saathi QR maker</title>
+  <meta name="description" content="Make a QR code that walks customers to your shop with AR directions.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Gelasio:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    body { background: var(--paper); }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 28px 18px 60px; display: grid; gap: 22px; grid-template-columns: 1fr; }
+    @media (min-width: 860px) { .wrap { grid-template-columns: 1.05fr 1fr; align-items: start; } }
+    h1 { font-family: var(--serif); font-size: 34px; margin: 6px 0 4px; }
+    .lead { color: var(--muted); margin: 0 0 6px; }
+    .panel { background: #fff; border-radius: var(--radius); padding: 20px; box-shadow: 0 8px 30px rgba(0,0,0,.05); display: grid; gap: 14px; }
+    label { font-weight: 600; font-size: 14px; display: grid; gap: 6px; }
+    label small { font-weight: 400; color: var(--muted); }
+    input { font: inherit; padding: 13px 14px; border-radius: 14px; border: 1.5px solid #dcdad4; background: #fbfaf8; width: 100%; }
+    input:focus { outline: 2px solid var(--green); border-color: transparent; }
+    .or { text-align: center; color: var(--muted); font-size: 13px; }
+    #search-host gmp-place-autocomplete { width: 100%; }
+    .status { font-size: 14px; min-height: 20px; }
+    .status.ok { color: var(--green); } .status.err { color: var(--red); }
+    #pick-map { height: 220px; border-radius: 16px; overflow: hidden; background: #e8e6e1; }
+    .out { display: grid; gap: 14px; justify-items: center; }
+    #poster { width: 100%; max-width: 420px; border-radius: 18px; box-shadow: 0 10px 30px rgba(0,0,0,.12); background: #fff; }
+    .row { display: flex; gap: 10px; width: 100%; max-width: 420px; }
+    .row .btn { min-height: 52px; font-size: 16px; }
+    #url-out { width: 100%; max-width: 420px; font-size: 12.5px; word-break: break-all; color: var(--muted); background: #fff; border-radius: 12px; padding: 10px 12px; }
+    #url-out a { color: var(--blue); }
+    .tip { font-size: 13px; color: var(--muted); max-width: 420px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div>
+      <header class="brand"><span class="brand-dot"></span><span>Saathi</span></header>
+      <h1>Make your shop's QR code</h1>
+      <p class="lead">Customers scan it, the browser opens, and a green AR trail walks them to your door. No app needed.</p>
+
+      <div class="panel">
+        <div id="search-wrap">
+          <label>Find your shop on Google Maps</label>
+          <div id="search-host"></div>
+        </div>
+        <div class="or" id="or-line">— or —</div>
+        <label>Paste a Google Maps link or coordinates
+          <small>In Google Maps, long-press your shop's entrance and copy the coordinates, or use Share ▸ Copy link and open it once to get the full link.</small>
+          <input id="maps-input" placeholder="https://www.google.com/maps/place/…  or  28.632650, 77.218350">
+        </label>
+        <div id="status" class="status"></div>
+        <div id="pick-map"></div>
+        <label>Shop name <input id="name" placeholder="Rahman Stores" maxlength="40"></label>
+        <label>Offer for Saathi customers <small>(optional, shown when they arrive)</small>
+          <input id="offer" placeholder="10% Off" maxlength="30"></label>
+        <label>Tagline <small>(optional)</small> <input id="tagline" placeholder="Kirana · Since 1984" maxlength="40"></label>
+        <label>Your Saathi site address <small>(where index.html is hosted, must be https)</small>
+          <input id="base" placeholder="https://yourname.github.io/saathi-web/"></label>
+      </div>
+    </div>
+
+    <div class="out">
+      <canvas id="poster" width="1200" height="1700"></canvas>
+      <div class="row">
+        <button id="dl-poster" class="btn btn-primary" disabled>Download poster</button>
+        <button id="dl-qr" class="btn btn-outline" disabled>QR only</button>
+      </div>
+      <div id="url-out">Fill in the shop location to create the link.</div>
+      <p class="tip">Test it: open the link on your phone before printing. Stick the poster where people can scan it, such as the market entrance or the main road.</p>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+  <script type="module" src="js/create.js"></script>
+</body>
+</html>

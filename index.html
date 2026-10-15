@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#1c1c1e">
+  <title>Saathi – walk to the shop</title>
+  <meta name="description" content="AR walking directions to the shop, right in your browser.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Gelasio:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+  </script>
+</head>
+<body>
+  <!-- ───────── Where to? (no destination in the link) ───────── -->
+  <section id="search" class="screen paper" hidden>
+    <header class="brand"><span class="brand-dot"></span><span class="brand-label">Saathi</span></header>
+    <h1 class="serif where">Where to?</h1>
+    <div class="search-box">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+      <input id="search-input" type="search" autocomplete="off" enterkeyhint="search"
+             placeholder="Search a place, or paste a Google Maps link">
+      <button id="search-clear" class="clear" aria-label="Clear" hidden>✕</button>
+    </div>
+    <p id="search-status" class="search-status"></p>
+    <ul id="search-results" class="results"></ul>
+    <div id="recent-wrap" hidden>
+      <h3 class="list-title">Recent</h3>
+      <ul id="recent-list" class="results"></ul>
+    </div>
+    <h3 class="list-title">Or tap the map to drop a pin</h3>
+    <div class="pick-map-wrap">
+      <div id="search-map" class="search-map"></div>
+      <div id="pin-card" class="pin-card" hidden>
+        <div><b id="pin-name">Dropped pin</b><small id="pin-sub"></small></div>
+        <button id="pin-go" class="btn btn-primary btn-small">Go here</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────── Landing: destination card ───────── -->
+  <section id="landing" class="screen paper">
+    <header class="brand">
+      <span class="brand-dot"></span><span id="brand-name" class="brand-label">Saathi</span>
+      <button id="change-btn" class="link-btn">Change destination</button>
+    </header>
+
+    <div class="place-card">
+      <div class="place-photo" id="place-photo">
+        <span id="place-initials">RS</span>
+        <img id="place-img" alt="" hidden>
+        <small id="place-credit" hidden></small>
+      </div>
+      <div class="place-body">
+        <h1 id="place-name">Rahman Stores</h1>
+        <p id="place-sub" class="muted"></p>
+        <p id="place-meta" class="meta" hidden></p>
+        <span id="place-offer" class="chip" hidden></span>
+      </div>
+    </div>
+
+    <div class="landing-map" id="landing-map"></div>
+
+    <div class="landing-actions">
+      <button id="start-btn" class="btn btn-primary">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 L20 21 L12 16.5 L4 21 Z"/></svg>
+        Start AR navigation
+      </button>
+      <p id="far-note" class="far-note" hidden></p>
+      <div class="btn-row">
+        <a id="gmaps-btn" class="btn btn-outline" target="_blank" rel="noopener">Open in Google Maps</a>
+        <button id="share-btn" class="btn btn-outline btn-icon" aria-label="Share or make a QR code">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM18 18h3v3h-3zM14 20h2M20 14v2"/></svg>
+        </button>
+      </div>
+      <p class="fineprint">Uses your camera, location and compass on this phone. Nothing is recorded or uploaded.</p>
+    </div>
+
+    <div id="desktop-note" class="desktop-note" hidden>
+      <p><b>Open this page on your phone</b> to walk there with AR directions.</p>
+      <canvas id="desktop-qr" width="200" height="200"></canvas>
+      <button id="sim-btn" class="btn btn-outline">Try the simulator here</button>
+    </div>
+  </section>
+
+  <!-- ───────── Share / QR for this destination ───────── -->
+  <div id="share-sheet" class="share-sheet" hidden>
+    <div class="share-card">
+      <button id="share-close" class="x-btn dark" aria-label="Close">✕</button>
+      <h3 class="serif">Share this walk</h3>
+      <p class="muted">Anyone who scans this gets AR directions to <b id="share-name"></b>.</p>
+      <canvas id="share-qr" width="560" height="560"></canvas>
+      <div class="btn-row">
+        <button id="share-link" class="btn btn-primary">Share link</button>
+        <button id="share-dl" class="btn btn-outline">Save QR</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───────── Permission / loading ───────── -->
+  <section id="loading" class="screen dark center" hidden>
+    <div class="spinner"></div>
+    <h2 id="loading-title">Getting ready…</h2>
+    <p id="loading-detail" class="muted-light"></p>
+  </section>
+
+  <!-- ───────── AR navigation ───────── -->
+  <section id="nav" class="screen" hidden>
+    <video id="camera" playsinline muted autoplay></video>
+    <canvas id="ar"></canvas>
+
+    <div class="top-row">
+      <div class="instruction card-dark">
+        <svg id="turn-icon" viewBox="0 0 48 48" aria-hidden="true"><path d="M24 44 V10 M13 21 L24 8 L35 21"/></svg>
+        <div>
+          <div id="turn-title" class="serif">Go straight</div>
+          <div id="turn-dist" class="serif">120 m <small></small></div>
+        </div>
+      </div>
+      <button id="voice-btn" class="round-btn card-dark" aria-label="Voice guidance">
+        <svg viewBox="0 0 24 24"><path d="M3 9 H7 L12 5 V19 L7 15 H3 Z" fill="currentColor" stroke="none"/><path class="wave" d="M15.5 8.5 a5 5 0 0 1 0 7"/><path class="wave" d="M18.5 6 a8.5 8.5 0 0 1 0 12"/><path class="mute" d="M16 9 L22 15 M22 9 L16 15"/></svg>
+      </button>
+    </div>
+    <div class="sub-row">
+      <span id="accuracy" class="pill"><i></i><b>GPS</b></span>
+      <span id="points" class="pill gold"><i class="coin">₹</i><b>0</b></span>
+    </div>
+
+    <div id="turn-hint" class="turn-hint" hidden>
+      <svg viewBox="0 0 48 48"><path d="M24 6 L40 40 L24 31 L8 40 Z"/></svg>
+      <span>Turn around</span>
+    </div>
+
+    <div id="map-frame" class="map-frame compact">
+      <div id="nav-map" class="map"></div>
+      <button id="map-toggle" class="map-btn" aria-label="Expand map">
+        <svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"/></svg>
+      </button>
+      <button id="map-recenter" class="map-btn recenter" aria-label="Recenter" hidden>
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.5"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+      </button>
+    </div>
+
+    <div class="bottom card-dark">
+      <button id="exit-btn" class="x-btn" aria-label="End navigation">✕</button>
+      <div class="follow">Follow the green trail to</div>
+      <div id="dest-name" class="serif dest">Rahman Stores</div>
+      <div id="remaining" class="muted-light">— · —</div>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+  </section>
+
+  <!-- ───────── Arrival ───────── -->
+  <section id="arrived" class="screen dim" hidden>
+    <div class="sheet">
+      <div class="arrive-card">
+        <div class="badge"><svg viewBox="0 0 24 24"><path d="M5 12.5 L10 17.5 L19 7.5"/></svg></div>
+        <p class="muted">You've reached</p>
+        <h2 id="arrived-name" class="serif">Rahman Stores!</h2>
+        <p id="arrived-points-lead" class="muted">Congrats! You've collected</p>
+        <h3 id="arrived-points" class="serif">40 points!</h3>
+      </div>
+      <div id="arrived-offer" class="offer">
+        <p class="muted">You'll get</p>
+        <div id="offer-text" class="serif offer-big">10% Off</div>
+        <div id="offer-shop" class="serif">At Rahman Stores!</div>
+        <p class="redeem">Show this screen at the counter · <span id="redeem-code">#A1B2</span></p>
+      </div>
+      <button id="done-btn" class="btn btn-outline-dark">Done <svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+    </div>
+  </section>
+
+  <!-- ───────── Error ───────── -->
+  <section id="error" class="screen paper center" hidden>
+    <h2 class="serif">Oops!</h2>
+    <p id="error-text"></p>
+    <button id="retry-btn" class="btn btn-primary">Try again</button>
+    <a id="error-gmaps" class="btn btn-outline" target="_blank" rel="noopener">Open in Google Maps instead</a>
+  </section>
+
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
