@@ -644,7 +644,7 @@ async function startOutdoor() {
   if (S.useXR) {
     // Every GPS fix nudges the registration; between fixes ARCore tracking keeps the trail still.
     S.sensors.onPosition = (pos, acc) => {
-      if (S.aligner?.ready) S.aligner.gps(S.camAdj || S.ar.camera, toLocal(S.path.origin, pos), acc);
+      if (S.aligner?.ready && S.camAdj?.tracking !== false) S.aligner.gps(S.camAdj || S.ar.camera, toLocal(S.path.origin, pos), acc);
     };
   }
   await openNav(S.sensors.position);
@@ -761,6 +761,7 @@ function status(title, detail = '', ground = false) {
 const tmpQ = new THREE.Quaternion();
 const tmpE = new THREE.Euler();
 const tmpV = new THREE.Vector3();
+const tmpV2 = new THREE.Vector3();
 const tmpM = new THREE.Matrix4();
 const tmpM2 = new THREE.Matrix4();
 
@@ -769,19 +770,31 @@ function xrLoop(now, frame) {
   if (!S.xr) return;
   const dt = Math.min(0.1, (now - (S.last || now)) / 1000);
   S.last = now;
-  const cam = S.ar.camera;
   const xr = S.xr;
+
+  // This frame's pose straight from ARCore (three.js would only copy it into the camera during render, a frame late).
+  // No pose, or an emulated one, means tracking is lost: keep everything where it is until it comes back.
+  const cam = xr.viewerPose(frame);
+  const tracking = !!cam && !cam.emulated;
+  S.trackLostAt = tracking ? null : (S.trackLostAt ?? now);
+  const lost = S.trackLostAt != null && now - S.trackLostAt > 700;
+  if (lost !== !!S.trackLostShown) {
+    S.trackLostShown = lost;
+    $('xr-tracking').hidden = !lost;
+  }
+  if (!cam) { S.ar.render(); return; }
 
   // The camera, expressed in the frame the content was placed in: if ARCore has nudged the ground anchor since,
   // undo that nudge so all registration maths stays consistent, then apply it to the content as a whole.
   const delta = xr.anchorDelta(frame, tmpM);
-  const camAdj = S.camAdj ||= { position: new THREE.Vector3(), quaternion: new THREE.Quaternion() };
+  const camAdj = S.camAdj ||= { position: new THREE.Vector3(), quaternion: new THREE.Quaternion(), tracking: true };
   tmpM2.copy(delta).invert();
   camAdj.position.copy(cam.position).applyMatrix4(tmpM2);
   camAdj.quaternion.setFromRotationMatrix(tmpM2).multiply(cam.quaternion);
+  camAdj.tracking = tracking;
 
-  xr.updateGround(frame, cam.position.y);
-  const ground = xr.ground ?? (cam.position.y > 0.8 ? 0 : cam.position.y - CONFIG.eyeHeight);
+  if (tracking) xr.updateGround(frame, tmpM2, camAdj.position, camAdj.quaternion, now);
+  const ground = xr.ground ?? (camAdj.position.y > 0.8 ? 0 : camAdj.position.y - CONFIG.eyeHeight);
 
   if (!xr.groundLocked) {
     status('Point your camera at the ground', 'Move the phone slowly until the green ring appears on the floor.', true);
@@ -804,17 +817,17 @@ function xrLoop(now, frame) {
       toast('Walk a few steps along the trail and it will line up with the road', 4000);
     }
   }
-  if (S.mode === 'outdoor' && al.ready && S.sensors.hasOrientation) al.compass(camAdj, S.sensors.heading);
+  if (S.mode === 'outdoor' && al.ready && tracking && S.sensors.hasOrientation) al.compass(camAdj, S.sensors.heading);
 
   if (al.ready) {
-    // Glue everything to a real anchor on the ground once we've found it.
-    if (xr.groundLocked && !xr.anchor) xr.anchorAt(frame, { x: cam.position.x, y: ground, z: cam.position.z });
+    // Glue everything to a real anchor on the ground near you (renewed as you walk).
+    if (tracking) xr.maintainAnchor(frame, tmpV.set(camAdj.position.x, ground, camAdj.position.z), delta);
 
     const user = al.userLocal(camAdj);
     const pr = S.path.project(user, S.seg);
     S.seg = pr.seg;
     S.along = pr.along;
-    if (pr.lateral < 15) {
+    if (tracking && pr.lateral < 15) {
       // You're walking the route, so the road direction you just covered gives the true heading,
       // and your position belongs on the route line (GPS drifts sideways by several metres).
       al.walkAlong(camAdj, bearingAlong(S.path, Math.max(0, pr.along - 3)));
@@ -829,6 +842,11 @@ function xrLoop(now, frame) {
     world.matrixAutoUpdate = false;
     world.matrixWorldNeedsUpdate = true;
     world.visible = xr.groundLocked || now - (S.xrGroundWait ??= now) > 8000;
+    // Follow the real ground along the trail (slopes, kerbs, stairs) where hit tests and planes have seen it.
+    S.ar.heightAt = xr.groundLocked ? (x, y) => {
+      const p = al.toXR(x, y, tmpV2);
+      return xr.groundAt(p.x, p.z) - ground;
+    } : null;
 
     const got = S.ar.update(dt, user, pr.along, null);
     if (got) collect(got);
@@ -1085,6 +1103,9 @@ function stopNav() {
   if (S.xr?.session) { S.xr.onEnd = null; S.xr.end(); }
   S.xr = null;
   S.aligner = null;
+  if (S.ar) S.ar.heightAt = null;
+  S.trackLostAt = null; S.trackLostShown = false;
+  $('xr-tracking').hidden = true;
   $('nav').classList.remove('xr');
   S.ped?.stop();
   S.ped = null;

@@ -126,6 +126,11 @@ export class Aligner {
   /** Where the camera is in route metres, according to what's currently drawn. */
   userLocal(camera) { return this._userLocalAt(camera, this.shownTheta, this.shownT); }
 
+  /** A route point (local metres) in the XR content frame, according to what's currently drawn (y = 0). */
+  toXR(x, y, out = new THREE.Vector3()) {
+    return out.copy(rot(this.shownTheta, x, y)).add(this.shownT);
+  }
+
   /** Applies the drawn transform to the content group (y = ground height). */
   apply(group, groundY) {
     group.rotation.set(0, this.shownTheta * D2R, 0);

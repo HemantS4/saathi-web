@@ -53,6 +53,14 @@ On **Android Chrome** (ARCore phones) navigation runs as a **WebXR AR session**:
   and coins sit on it.
 - ARCore **tracks the phone's movement**, so the trail stays locked in place between GPS fixes instead of drifting.
 - GPS + compass only register the route to the world, refined by the direction you actually walk.
+- **The trail follows the real ground**, not one flat level: every ground hit (and every horizontal plane, where Chrome
+  offers plane detection) goes into a 1 m height grid around you, and a fitted slope carries it further ahead. Chevrons,
+  coins, turn arrows and the pin sit on that surface, so slopes, kerbs and stairs are followed. Benches, car bonnets and
+  tables are ignored (they're too high above the ground you're walking on).
+- The ground under you is measured from hits just in front of the phone, and follows the phone's height when you look
+  ahead instead of down, so walking up a hill or a flight of stairs keeps it right.
+- A **ground anchor** is dropped near you every 12 m. ARCore's map corrections move the anchor, and the trail moves with it.
+  If tracking is lost, everything holds still ("AR tracking paused") until ARCore recovers.
 
 **Lining the trail up with the road.** The app reads the compass before AR starts. Then, once you have walked about 4 m along the route, it uses the road direction you just covered to correct the trail's rotation, and keeps your position snapped onto the route line. If it still looks off, tap **Align** and drag sideways until the trail lies on the road.
 
