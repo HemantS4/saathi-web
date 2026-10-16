@@ -39,6 +39,8 @@ export class ARScene {
     this.user = { x: 0, y: 0 };
     this.along = 0;
     this.time = 0;
+    // WebXR: (x, y) local metres → ground height there relative to the world group (slopes, kerbs, stairs). null = flat.
+    this.heightAt = null;
     this.resize();
     addEventListener('resize', () => this.resize());
   }
@@ -80,6 +82,7 @@ export class ARScene {
       a.position.set(at.x, 1.9, -at.y);
       a.rotation.y = -Math.atan2(dx, dy); // geometry points north (-z); yaw by the outgoing bearing
       a.userData.baseY = a.position.y;
+      a.userData.local = at;
       this.world.add(a);
       this.arrows.push(a);
     }
@@ -130,7 +133,7 @@ export class ARScene {
         continue;
       }
       coin.rotation.z += dt * 3;
-      c.position.y = 1.05 + Math.sin(this.time * 2 + u.phase) * 0.08;
+      c.position.y = 1.05 + this._h(u.local.x, u.local.y) + Math.sin(this.time * 2 + u.phase) * 0.08;
       const d = Math.hypot(u.local.x - userLocal.x, u.local.y - userLocal.y);
       c.visible = d < 70;
       // Walking past it on the route counts too (GPS rarely puts you exactly on top of it).
@@ -138,7 +141,9 @@ export class ARScene {
         u.collected = true; u.t = 0; collected++;
       }
     }
-    for (const a of this.arrows) a.position.y = a.userData.baseY + Math.sin(this.time * 2) * 0.12;
+    for (const a of this.arrows) {
+      a.position.y = a.userData.baseY + this._h(a.userData.local.x, a.userData.local.y) + Math.sin(this.time * 2) * 0.12;
+    }
     this.updatePin();
     return collected;
   }
@@ -158,8 +163,12 @@ export class ARScene {
       }
       const { p } = this.path.at(d);
       const a = this.path.at(Math.max(0, d - 1)).p, b = this.path.at(Math.min(this.path.length, d + 1)).p;
-      m.position.set(p.x, 0.03, -p.y);
-      m.rotation.set(-Math.PI / 2, 0, Math.atan2(-(b.x - a.x), b.y - a.y));
+      const h = this._h(p.x, p.y);
+      m.position.set(p.x, h + 0.03, -p.y);
+      // Tilt with the slope so the chevron lies on the road instead of cutting into it.
+      const run = Math.hypot(b.x - a.x, b.y - a.y);
+      const slope = this.heightAt && run > 0.1 ? Math.atan2(this._h(b.x, b.y) - this._h(a.x, a.y), run) : 0;
+      m.rotation.set(-Math.PI / 2 + slope, Math.atan2(-(b.x - a.x), b.y - a.y), 0, 'YXZ');
       const rel = d - this.along;
       const fade = Math.min(1, (rel + 2) / 3) * Math.min(1, (CONFIG.trailAhead - rel) / 12);
       const phase = ((d - this.time * 6) % 9 + 9) % 9 / 9;
@@ -179,12 +188,20 @@ export class ARScene {
     // Far away: pull the pin in to 60 m and scale it up so it stays visible over the rooftops.
     const show = Math.min(d, 60), k = d > 0 ? show / d : 0;
     const scale = (this.pinScale ?? 1) * Math.max(1, show / 25); // roughly constant on-screen size once parked at 60 m
-    this.pin.group.position.set(this.user.x + dx * k, 0, -(this.user.y + dy * k));
+    const px = this.user.x + dx * k, py = this.user.y + dy * k;
+    this.pin.group.position.set(px, this._h(px, py), -py);
     this.pin.group.scale.setScalar(scale);
     this.pin.head.rotation.y += 0.03;
     // Face the camera: undo the world group's rotation so the label's world orientation equals the camera's.
     this.pin.label.quaternion.copy(this.pin.group.getWorldQuaternion(new THREE.Quaternion()).invert()).multiply(this.camera.quaternion);
     if (Math.abs(d - this.pin.shownDist) > 5) this.pin.setLabel(this.pin.name, d);
+  }
+
+  /** Ground height at a route point (local metres), relative to the world group. */
+  _h(x, y) {
+    if (!this.heightAt) return 0;
+    const h = this.heightAt(x, y);
+    return Number.isFinite(h) ? Math.max(-3, Math.min(3, h)) : 0;
   }
 
   /** Tap to collect a coin. Returns true if one was hit. */
